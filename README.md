@@ -21,7 +21,9 @@ There is **no window, renderer, voxel world, input handling, or gameplay yet**. 
 ## Requirements
 
 - JDK 21
-- Gradle 9.6.1 or newer in the Gradle 9.x line
+- Gradle 9.6.1
+
+The pre-Phase 0 bootstrap currently uses an installed Gradle distribution rather than a committed Gradle Wrapper. GitHub Actions installs and pins Gradle 9.6.1 before running the build.
 
 ## Build and test
 
