@@ -1,0 +1,68 @@
+plugins {
+    id 'application'
+}
+
+group = 'dev.orscathinus'
+version = '0.0.1-SNAPSHOT'
+
+def lwjglVersion = '3.4.1'
+def jomlVersion = '1.10.8'
+def junitVersion = '5.14.3'
+
+def osName = System.getProperty('os.name').toLowerCase(java.util.Locale.ROOT)
+def osArch = System.getProperty('os.arch').toLowerCase(java.util.Locale.ROOT)
+def arm64 = osArch.contains('aarch64') || osArch.contains('arm64')
+
+def lwjglNatives
+if (osName.contains('mac') || osName.contains('darwin')) {
+    lwjglNatives = arm64 ? 'natives-macos-arm64' : 'natives-macos'
+} else if (osName.contains('win')) {
+    lwjglNatives = arm64 ? 'natives-windows-arm64' : 'natives-windows'
+} else if (osName.contains('linux')) {
+    lwjglNatives = arm64 ? 'natives-linux-arm64' : 'natives-linux'
+} else {
+    throw new GradleException("Unsupported operating system: ${System.getProperty('os.name')}")
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation platform("org.lwjgl:lwjgl-bom:${lwjglVersion}")
+    implementation 'org.lwjgl:lwjgl'
+    implementation 'org.lwjgl:lwjgl-glfw'
+    implementation 'org.lwjgl:lwjgl-opengl'
+    implementation "org.joml:joml:${jomlVersion}"
+
+    runtimeOnly "org.lwjgl:lwjgl::${lwjglNatives}"
+    runtimeOnly "org.lwjgl:lwjgl-glfw::${lwjglNatives}"
+    runtimeOnly "org.lwjgl:lwjgl-opengl::${lwjglNatives}"
+
+    testImplementation platform("org.junit:junit-bom:${junitVersion}")
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+application {
+    mainClass = 'dev.orscathinus.cavegame.CaveGame'
+
+    if (osName.contains('mac') || osName.contains('darwin')) {
+        applicationDefaultJvmArgs = ['-XstartOnFirstThread']
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+}
