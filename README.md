@@ -4,52 +4,90 @@ A small, historically inspired recreation project targeting the feel and technic
 
 This repository is an independent educational recreation. It is not affiliated with Mojang or Microsoft, and it does not include copyrighted Minecraft textures, sounds, source code, or other assets.
 
-## Current status: Phase 0 specification complete
+## Current status: Phase 1 application foundation complete
 
-Phase 0 defines the target before game implementation begins:
+Phase 1 provides the desktop application shell:
 
-- [`SPEC.md`](SPEC.md): required behavior, acceptance criteria, and explicit non-goals;
-- [`ASSUMPTIONS.md`](ASSUMPTIONS.md): numbered approximation choices for undocumented details;
-- [`ROADMAP.md`](ROADMAP.md): implementation phases 1 through 12 and their validation gates.
+- a resizable `1280 × 720` GLFW window;
+- an OpenGL 3.3 Core context;
+- VSync enabled by default;
+- the documented sky clear color `#7FCCFF`;
+- a fixed 60-updates-per-second simulation clock;
+- rendering that runs independently of fixed updates;
+- bounded catch-up behavior after a pause or window move;
+- Escape and native window-close shutdown;
+- startup logging for the OpenGL version and renderer;
+- clean GLFW, callback, window, and OpenGL-context cleanup.
 
-The repository still contains only the pre-Phase 0 Java bootstrap. There is **no game window, renderer, voxel world, terrain, input handling, or gameplay yet**. No Java source files were created or modified during Phase 0.
+There are still **no blocks, terrain, player, camera movement, textures, or gameplay**. See [`ROADMAP.md`](ROADMAP.md) for later phases.
+
+The historical target and reconstruction boundaries are documented in:
+
+- [`SPEC.md`](SPEC.md)
+- [`ASSUMPTIONS.md`](ASSUMPTIONS.md)
+- [`ROADMAP.md`](ROADMAP.md)
 
 ## Requirements
 
+- A desktop computer with OpenGL 3.3 Core support
 - JDK 21
-- Gradle 9.6.1
 
-The project currently uses an installed Gradle distribution rather than a committed Gradle Wrapper. GitHub Actions installs and pins Gradle 9.6.1 before running the build.
+The checked-in `gradlew` and `gradlew.bat` launchers pin Gradle 9.6.1. On the first invocation, the launcher downloads the official Gradle wrapper bootstrap and verifies its SHA-256 checksum before using it. Gradle then downloads and caches the pinned distribution.
 
 ## Build and test
 
-```bash
-gradle clean build
-```
-
-Run tests only:
+macOS or Linux:
 
 ```bash
-gradle test
+./gradlew build
+./gradlew test
 ```
 
-Run the non-graphical bootstrap entry point:
+Windows Command Prompt or PowerShell:
+
+```bat
+gradlew.bat build
+gradlew.bat test
+```
+
+## Run
+
+macOS or Linux:
 
 ```bash
-gradle run
+./gradlew run
 ```
 
-The program reports the detected desktop platform and the LWJGL native classifier that later phases will use.
+Windows:
+
+```bat
+gradlew.bat run
+```
+
+On macOS, the Gradle application configuration automatically adds the `-XstartOnFirstThread` JVM option required by GLFW.
+
+## What appears on screen
+
+Running the application opens a resizable window titled **Cave Game Tech Test Recreation**. The entire client area is a flat light-blue sky color (`#7FCCFF`). There are no blocks, menus, text, crosshair, or player model yet.
+
+Resize the window normally. The OpenGL viewport follows the framebuffer size, so resizing should not crash the application or leave an incorrectly sized rendering area.
 
 ## Controls
 
-None yet. Phase 0 is documentation-only and does not create a graphical window or gameplay input.
+- `Escape`: close the application.
+- Window close button: close the application.
 
-The final target controls specified for later phases are WASD movement, Space to jump, mouse look, and repeated respawning while R is held.
+No movement or gameplay controls are active in Phase 1.
+
+## GitHub Pages limitation
+
+This Phase 1 application is a native Java/LWJGL desktop program. GitHub Pages serves static web files and cannot execute this JVM/OpenGL application inside a browser.
+
+GitHub Pages may later host a project website, documentation, screenshots, and links to downloadable desktop builds. A browser-playable edition would require a separate WebGL/WebAssembly port and is outside the current specification.
 
 ## Supported desktop targets
 
-The build currently selects LWJGL native libraries for:
+The build selects LWJGL native libraries for:
 
 - Windows x64 and ARM64;
 - Linux x64 and ARM64;
