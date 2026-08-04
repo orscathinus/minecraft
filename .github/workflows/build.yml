@@ -32,6 +32,12 @@ jobs:
       - name: Validate browser target
         run: |
           for module in web/*.mjs; do node --check "$module"; done
+          node --check tools/benchmark-web.mjs
           node --test web/test/*.test.mjs
+      - name: Record Phase 11 benchmark
+        run: |
+          mkdir -p build/diagnostics
+          node tools/benchmark-web.mjs --json > build/diagnostics/phase11-benchmark.json
+          cat build/diagnostics/phase11-benchmark.json
       - name: Smoke-test browser WebGL 2 application
         run: bash web/test/browser-smoke.sh
