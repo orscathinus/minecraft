@@ -1,93 +1,109 @@
 # Cave Game Tech Test Recreation
 
-A small, historically inspired recreation project targeting the feel and technical scope of the May 13, 2009 **Cave Game Tech Test**.
+A small, historically inspired recreation targeting the technical scope of the May 13, 2009 **Cave Game Tech Test**.
 
-This repository is an independent educational recreation. It is not affiliated with Mojang or Microsoft, and it does not include copyrighted Minecraft textures, sounds, source code, or other assets.
+This is an independent educational recreation. It is not affiliated with Mojang or Microsoft, and it does not include copyrighted Minecraft textures, sounds, source code, or other assets.
 
-## Current status: Phase 1 application foundation complete
+## Play in a browser
 
-Phase 1 provides the desktop application shell:
+The primary public build is designed for GitHub Pages:
 
-- a resizable `1280 × 720` GLFW window;
-- an OpenGL 3.3 Core context;
-- VSync enabled by default;
+**https://orscathinus.github.io/minecraft/**
+
+The repository owner must enable the deployment source once under:
+
+**Settings → Pages → Build and deployment → Source → GitHub Actions**
+
+After that setting is enabled, every relevant push to `main` automatically validates and deploys the browser build from `web/`.
+
+## Current status: browser-enabled Phase 1 foundation
+
+The browser build currently provides:
+
+- a full-window WebGL 2 canvas;
 - the documented sky clear color `#7FCCFF`;
-- a fixed 60-updates-per-second simulation clock;
-- rendering that runs independently of fixed updates;
-- bounded catch-up behavior after a pause or window move;
-- Escape and native window-close shutdown;
-- startup logging for the OpenGL version and renderer;
-- clean GLFW, callback, window, and OpenGL-context cleanup.
+- display-synchronized rendering through `requestAnimationFrame`;
+- fixed simulation updates at 60 updates per second;
+- bounded catch-up behavior after pauses or inactive tabs;
+- browser zoom, resize, and high-density-display handling;
+- WebGL version and renderer logging;
+- visible startup error reporting.
 
-There are still **no blocks, terrain, player, camera movement, textures, or gameplay**. See [`ROADMAP.md`](ROADMAP.md) for later phases.
+There are still **no blocks, terrain, player, camera movement, textures, or gameplay**. The current visible result is a flat light-blue screen.
 
-The historical target and reconstruction boundaries are documented in:
+Pressing `Escape` stops the browser application. Webpages are normally not permitted to close their own tabs, so close the tab or reload the page afterward.
 
-- [`SPEC.md`](SPEC.md)
-- [`ASSUMPTIONS.md`](ASSUMPTIONS.md)
-- [`ROADMAP.md`](ROADMAP.md)
+## Browser development
 
-## Requirements
+Requirements:
 
-- A desktop computer with OpenGL 3.3 Core support
-- JDK 21
+- a current browser with WebGL 2 enabled;
+- Node.js 24 for automated browser-logic tests;
+- Python 3 or another static HTTP server for local preview.
 
-The checked-in `gradlew` and `gradlew.bat` launchers pin Gradle 9.6.1. On the first invocation, the launcher downloads the official Gradle wrapper bootstrap and verifies its SHA-256 checksum before using it. Gradle then downloads and caches the pinned distribution.
+Run the browser tests:
 
-## Build and test
+```bash
+node --test web/test/*.test.mjs
+```
 
-macOS or Linux:
+Serve the browser build locally:
+
+```bash
+python3 -m http.server 8000 --directory web
+```
+
+Then open `http://localhost:8000`.
+
+The browser architecture and its relationship to the desktop build are documented in [`WEB_TARGET.md`](WEB_TARGET.md).
+
+## Desktop reference build
+
+The existing Java/LWJGL desktop target remains available as a working reference implementation of Phase 1.
+
+Requirements:
+
+- a desktop computer with OpenGL 3.3 Core support;
+- JDK 21.
+
+Build and test on macOS or Linux:
 
 ```bash
 ./gradlew build
 ./gradlew test
 ```
 
-Windows Command Prompt or PowerShell:
-
-```bat
-gradlew.bat build
-gradlew.bat test
-```
-
-## Run
-
-macOS or Linux:
+Run the desktop target:
 
 ```bash
 ./gradlew run
 ```
 
-Windows:
+Windows equivalents:
 
 ```bat
+gradlew.bat build
+gradlew.bat test
 gradlew.bat run
 ```
 
-On macOS, the Gradle application configuration automatically adds the `-XstartOnFirstThread` JVM option required by GLFW.
+The checked-in Gradle launchers pin Gradle 9.6.1. The first invocation downloads the official wrapper bootstrap, verifies its SHA-256 checksum, and then downloads the pinned Gradle distribution.
 
-## What appears on screen
+## Project documents
 
-Running the application opens a resizable window titled **Cave Game Tech Test Recreation**. The entire client area is a flat light-blue sky color (`#7FCCFF`). There are no blocks, menus, text, crosshair, or player model yet.
+- [`SPEC.md`](SPEC.md): historical target behavior and non-goals.
+- [`ASSUMPTIONS.md`](ASSUMPTIONS.md): conservative approximation choices.
+- [`ROADMAP.md`](ROADMAP.md): implementation phases 1 through 12.
+- [`WEB_TARGET.md`](WEB_TARGET.md): browser delivery amendment.
 
-Resize the window normally. The OpenGL viewport follows the framebuffer size, so resizing should not crash the application or leave an incorrectly sized rendering area.
+## Supported targets
 
-## Controls
+Browser target:
 
-- `Escape`: close the application.
-- Window close button: close the application.
+- current desktop browsers with WebGL 2;
+- current mobile browsers where WebGL 2 and sufficient resources are available.
 
-No movement or gameplay controls are active in Phase 1.
-
-## GitHub Pages limitation
-
-This Phase 1 application is a native Java/LWJGL desktop program. GitHub Pages serves static web files and cannot execute this JVM/OpenGL application inside a browser.
-
-GitHub Pages may later host a project website, documentation, screenshots, and links to downloadable desktop builds. A browser-playable edition would require a separate WebGL/WebAssembly port and is outside the current specification.
-
-## Supported desktop targets
-
-The build selects LWJGL native libraries for:
+Desktop reference target:
 
 - Windows x64 and ARM64;
 - Linux x64 and ARM64;
