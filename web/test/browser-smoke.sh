@@ -43,20 +43,24 @@ run_browser_check() {
         --enable-webgl \
         --use-angle=swiftshader \
         --enable-unsafe-swiftshader \
-        --virtual-time-budget=7000 \
+        --virtual-time-budget=30000 \
         --dump-dom \
         "${url}" >"${output}"
 
     grep -q 'data-app-state="running"' "${output}"
     grep -q 'data-webgl="2"' "${output}"
-    grep -q 'data-phase="3"' "${output}"
+    grep -q 'data-phase="4"' "${output}"
     grep -q 'data-draw-calls="1"' "${output}"
     grep -q 'data-gl-errors="0"' "${output}"
     grep -q 'data-geometry="visible"' "${output}"
-    grep -q 'data-chunk-count="1"' "${output}"
-    grep -q 'data-chunk-faces="1220"' "${output}"
+    grep -q 'data-chunk-count="256"' "${output}"
+    grep -q 'data-world-faces="197256"' "${output}"
+    grep -q 'data-world-bounds="0-255,0-63,0-255"' "${output}"
+    grep -q 'data-terrain-range="57-63"' "${output}"
+    grep -q 'data-actual-terrain-range="58-62"' "${output}"
+    grep -q 'data-seed="1337"' "${output}"
 }
 
 run_browser_check "${BASE_URL}/" "${ROOT_DOM_OUTPUT}"
 run_browser_check "${BASE_URL}/web/" "${WEB_DOM_OUTPUT}"
-echo "Root and web-directory Phase 3 chunk smoke tests passed."
+echo "Root and web-directory Phase 4 finite-world smoke tests passed."
