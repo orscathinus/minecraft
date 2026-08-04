@@ -10,25 +10,23 @@ This is an independent educational recreation. It is not affiliated with Mojang 
 
 The project supports GitHub Pages from `main` / repository root and through the GitHub Actions deployment of `web/`.
 
-## Current status: Phase 5 first-person player
+## Current status: Phase 6 cave generation
 
-The browser build generates the deterministic finite Phase 4 world and places a collision-enabled first-person player on its surface.
+The browser build generates the deterministic finite world, carves primitive caves, builds cave-aware chunk meshes, and places the collision-enabled first-person player beside a surface cave entrance.
 
-Player approximation:
+The cave pass runs after terrain generation and before meshing. It uses six seeded, curved random-walk tunnels made from overlapping spheres. Two tunnels connect through a shared pit, five begin at or break through the upper surface, and one tunnel descends to Y=1. Radius varies between approximately 1.20 and 2.25 blocks. Y=0 is never carved.
 
-- height: exactly `1.62` blocks;
-- width: exactly `0.60` blocks;
-- eye height: `1.54` blocks above the feet;
-- axis-aligned bounding box;
-- no visible player model.
+Caves contain only AIR removed from existing GRASS or ROCK. After carving, each column is rescanned: only its highest directly sky-exposed solid block may be GRASS, and only when that block remains within Y=57 through Y=63. Grass is not placed on deep cave floors or walls.
 
-The player uses gravity, grounded-only jumping, floor and ceiling collision, horizontal voxel collision, and independent X/Z resolution for wall sliding. GRASS and ROCK are solid; AIR is passable. Movement is simulated through the existing fixed 60-updates-per-second loop, so render-frame rate changes do not change movement or jumping.
+Every edited chunk is marked dirty. Edits on a chunk boundary also invalidate the neighboring chunk, so rebuilding does not leave duplicate or missing faces at seams.
 
 ## What appears on screen
 
-After generation and meshing finish, the application opens from the player’s eye position near the center of the rolling grass world. The camera is close to the surface rather than flying above the map. The user can walk across grass, jump onto or over one-block height changes, collide with rock and grass blocks, and look around with the mouse.
+After terrain, cave, and meshing progress finish, the application opens at normal first-person eye height on solid grass beside the nearest substantial cave opening. The player initially faces the entrance.
 
-The finite world, sharp placeholder textures, light-blue `#7FCCFF` sky, and seed query parameter remain unchanged. No player body is rendered in front of or behind the camera.
+The user sees a dark, irregular pit or tunnel opening cut through the green surface. Walking forward allows the player to enter, descend, jump around cave passages, or fall into deeper sections. Interior walls use the same sharp placeholder rock texture. Some passages intersect, widen into small chambers, and continue toward the second-lowest world layer.
+
+The finite rolling surface, light-blue `#7FCCFF` sky, player collision, gravity, jumping, and seed query parameter remain active. No player model is rendered.
 
 ## Browser controls
 
@@ -43,7 +41,9 @@ There is no flying, sprinting, crouching, swimming, or automatic step-up.
 
 ## World and seed
 
-The finite world remains exactly X/Z `0..255` and Y `0..63`, divided into a `16 × 16` horizontal grid of 256 full-height chunks. The default seed is `1337`. Add an integer query parameter such as `?seed=42` to create a different deterministic landscape.
+The world remains exactly X/Z `0..255` and Y `0..63`, divided into a `16 × 16` horizontal grid of 256 full-height chunks. The default seed is `1337`. Add an integer query parameter such as `?seed=42` to create a different deterministic terrain-and-cave layout.
+
+For the default seed, the cave pass carves 4,171 blocks, opens 81 former surface-grass blocks, reaches Y=1, and marks 33 affected or neighboring chunks for remeshing.
 
 ## Browser development
 
@@ -56,17 +56,17 @@ python3 -m http.server 8000
 
 Open `http://localhost:8000/` or `http://localhost:8000/web/`.
 
-## Phase 5 structure
+## Phase 6 structure
 
-- `web/aabb.mjs`: reusable AABB construction and intersection tests.
-- `web/player-physics.mjs`: player dimensions, gravity, jumping, voxel collision, and wall sliding.
-- `web/first-person-player.mjs`: keyboard, pointer-lock, mouse-look, and focus-reset handling.
-- `web/app.mjs`: fixed-step player updates and first-person rendering.
-- `web/test/player-physics.test.mjs`: focused floor, ceiling, wall, sliding, grounding, and frame-rate tests.
+- `web/cave-generator.mjs`: seeded pit and sphere-worm carving, grass correction, and cave statistics.
+- `web/world.mjs`: voxel editing plus dirty-chunk and boundary-neighbor invalidation.
+- `web/app.mjs`: terrain, cave, meshing, cave-adjacent spawning, and first-person lifecycle.
+- `web/test/cave-generator.test.mjs`: determinism, depth, bottom, block-set, sunlight-grass, seam, and invalidation tests.
+- `web/test/browser-smoke.sh`: real Chromium validation of both GitHub Pages entry layouts.
 
 ## Desktop reference build
 
-The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 5 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
+The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 6 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
 
 ```bash
 ./gradlew build
@@ -76,4 +76,4 @@ The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phas
 
 ## Scope boundary
 
-Phase 5 does not add caves, block breaking, block placement, inventory, crouching, sprinting, swimming, step-up, a player model, enemies, sound, or world saving.
+Phase 6 does not add ravines, aquifers, water, lava, ores, dungeons, biomes, block breaking, block placement, inventory, enemies, sound, or world saving.
