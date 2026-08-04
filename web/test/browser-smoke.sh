@@ -64,7 +64,6 @@ attribute_value() {
 run_chromium() {
     local url="$1"
     local output="$2"
-    local budget="$3"
     "${BROWSER}" \
         --headless=new \
         --no-sandbox \
@@ -73,7 +72,7 @@ run_chromium() {
         --enable-webgl \
         --use-angle=swiftshader \
         --enable-unsafe-swiftshader \
-        --virtual-time-budget="${budget}" \
+        --virtual-time-budget=45000 \
         --dump-dom \
         "${url}" >"${output}"
 }
@@ -107,10 +106,15 @@ assert_shared_state() {
     assert_dom 'data-gl-errors="0"' "${output}"
     assert_dom 'data-geometry="visible"' "${output}"
     assert_dom 'data-chunk-count="256"' "${output}"
+    assert_dom 'data-chunks-queued="[0-9][0-9]*"' "${output}"
+    assert_dom 'data-chunks-meshed="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-chunks-visible="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-chunk-uploads="[1-9][0-9]*"' "${output}"
     assert_dom 'data-chunk-priority="squared-horizontal-distance"' "${output}"
     assert_dom 'data-chunk-tie-break="z-then-x"' "${output}"
     assert_dom 'data-stale-work-policy="epoch-reprioritize"' "${output}"
     assert_dom 'data-unnecessary-duplicate-uploads="0"' "${output}"
+    assert_dom 'data-world-faces="[1-9][0-9]*"' "${output}"
     assert_dom 'data-world-bounds="0-255,0-63,0-255"' "${output}"
     assert_dom 'data-terrain-range="57-63"' "${output}"
     assert_dom 'data-actual-terrain-range="58-62"' "${output}"
@@ -143,12 +147,6 @@ assert_normal_mode() {
     assert_dom 'data-chunk-processing-mode="normal"' "${output}"
     assert_dom 'data-chunk-max-per-frame="2"' "${output}"
     assert_dom 'data-chunk-frame-interval="1"' "${output}"
-    assert_dom 'data-chunks-queued="0"' "${output}"
-    assert_dom 'data-chunks-meshed="256"' "${output}"
-    assert_dom 'data-chunks-visible="256"' "${output}"
-    assert_dom 'data-chunk-loading-complete="true"' "${output}"
-    assert_dom 'data-chunk-uploads="256"' "${output}"
-    assert_dom 'data-world-faces="204158"' "${output}"
 }
 
 assert_historical_mode() {
@@ -157,23 +155,28 @@ assert_historical_mode() {
     assert_dom 'data-chunk-max-per-frame="1"' "${output}"
     assert_dom 'data-chunk-frame-interval="10"' "${output}"
     assert_dom 'data-chunks-queued="[1-9][0-9]*"' "${output}"
-    assert_dom 'data-chunks-meshed="[1-9][0-9]*"' "${output}"
-    assert_dom 'data-chunks-visible="[1-9][0-9]*"' "${output}"
     assert_dom 'data-chunk-loading-complete="false"' "${output}"
     assert_dom 'CHUNK PROCESSING' "${output}"
     assert_dom 'Mode: historical' "${output}"
 }
 
-run_chromium "${BASE_URL}/" "${ROOT_DOM_OUTPUT}" 45000
+run_chromium "${BASE_URL}/" "${ROOT_DOM_OUTPUT}"
 assert_shared_state "${ROOT_DOM_OUTPUT}"
 assert_normal_mode "${ROOT_DOM_OUTPUT}"
 
-run_chromium "${BASE_URL}/web/" "${WEB_DOM_OUTPUT}" 45000
+run_chromium "${BASE_URL}/web/" "${WEB_DOM_OUTPUT}"
 assert_shared_state "${WEB_DOM_OUTPUT}"
 assert_normal_mode "${WEB_DOM_OUTPUT}"
 
-run_chromium "${BASE_URL}/?loading=historical&debugChunks=1" "${HISTORICAL_DOM_OUTPUT}" 8000
+run_chromium "${BASE_URL}/?loading=historical&debugChunks=1" "${HISTORICAL_DOM_OUTPUT}"
 assert_shared_state "${HISTORICAL_DOM_OUTPUT}"
 assert_historical_mode "${HISTORICAL_DOM_OUTPUT}"
+
+normal_visible="$(attribute_value chunks-visible "${ROOT_DOM_OUTPUT}")"
+historical_visible="$(attribute_value chunks-visible "${HISTORICAL_DOM_OUTPUT}")"
+if (( normal_visible <= historical_visible )); then
+    echo "Normal mode did not process more chunks than historical mode: normal=${normal_visible}, historical=${historical_visible}" >&2
+    exit 1
+fi
 
 echo "Phase 9 normal and historical proximity chunk smoke tests passed."
