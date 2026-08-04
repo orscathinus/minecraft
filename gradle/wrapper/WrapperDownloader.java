@@ -12,7 +12,7 @@ import java.util.HexFormat;
 /** Downloads and verifies the official Gradle 9.6.1 wrapper bootstrap JAR. */
 public final class WrapperDownloader {
     private static final URI WRAPPER_URI = URI.create(
-            "https://services.gradle.org/distributions/gradle-9.6.1-wrapper.jar"
+            "https://raw.githubusercontent.com/gradle/gradle/v9.6.1/gradle/wrapper/gradle-wrapper.jar"
     );
     private static final String EXPECTED_SHA_256 =
             "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7";
