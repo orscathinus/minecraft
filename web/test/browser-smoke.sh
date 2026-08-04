@@ -19,7 +19,15 @@ for _ in {1..30}; do
     if curl --fail --silent "${BASE_URL}/index.html" >/dev/null; then break; fi
     sleep 0.2
 done
-for path in index.html web/index.html web/shaders/block.vert.glsl web/shaders/block.frag.glsl; do
+for path in \
+    index.html \
+    web/index.html \
+    web/block-textures.mjs \
+    web/atlas.mjs \
+    web/pixel-texture-sampling.mjs \
+    web/texture-runtime-metadata.mjs \
+    web/shaders/block.vert.glsl \
+    web/shaders/block.frag.glsl; do
     curl --fail --silent "${BASE_URL}/${path}" >/dev/null
 done
 
@@ -57,9 +65,17 @@ run_browser_check() {
         --dump-dom \
         "${url}" >"${output}"
 
+    assert_dom 'Cave Game Tech Test Recreation · Phase 7' "${output}"
     assert_dom 'data-app-state="running"' "${output}"
     assert_dom 'data-webgl="2"' "${output}"
     assert_dom 'data-phase="6"' "${output}"
+    assert_dom 'data-texture-phase="7"' "${output}"
+    assert_dom 'data-texture-version="phase-7-original-v1"' "${output}"
+    assert_dom 'data-texture-size="16"' "${output}"
+    assert_dom 'data-texture-assets="original-procedural"' "${output}"
+    assert_dom 'data-atlas-gutter="1"' "${output}"
+    assert_dom 'data-texture-filtering="nearest"' "${output}"
+    assert_dom 'data-texture-mipmaps="false"' "${output}"
     assert_dom 'data-draw-calls="1"' "${output}"
     assert_dom 'data-gl-errors="0"' "${output}"
     assert_dom 'data-geometry="visible"' "${output}"
@@ -86,4 +102,4 @@ run_browser_check() {
 
 run_browser_check "${BASE_URL}/" "${ROOT_DOM_OUTPUT}"
 run_browser_check "${BASE_URL}/web/" "${WEB_DOM_OUTPUT}"
-echo "Root and web-directory Phase 6 cave-generation smoke tests passed."
+echo "Root and web-directory Phase 7 original-texture smoke tests passed."

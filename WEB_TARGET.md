@@ -14,32 +14,32 @@ The primary public build is a browser-playable application hosted by GitHub Page
 
 The browser build lives in `web/`. A root `index.html` loads the same modules for branch-based GitHub Pages.
 
-## Phase 6 deterministic caves
+## Phase 7 original block textures
 
-`web/cave-generator.mjs` runs after finite terrain generation and before any chunk mesh is built. It uses six seeded, curved random walks composed of overlapping spheres. Radius remains restrained between approximately 1.20 and 2.25 blocks. Two tunnels share a pit and several begin at or break through the upper grass surface. One descending tunnel is guaranteed to approach Y=1.
+`web/block-textures.mjs` deterministically generates two original `16 × 16` RGBA textures. GRASS uses a mottled six-color green palette. ROCK uses a dark irregular six-color neutral-gray palette. The algorithms and palettes were created specifically for this repository and do not load, copy, trace, sample, or derive pixels from Minecraft, Mojang, RubyDung, or another game.
 
-Carving only changes existing GRASS or ROCK to AIR. The sphere bounds clamp their minimum Y to 1, so Y=0 remains solid. The generator adds no water, lava, ores, dungeons, ravines, aquifers, biomes, or new block types.
+The same material is assigned to all six faces of each block. GRASS never switches to a dirt side, and ROCK has no alternate top or bottom. The renderer continues to use only position, atlas UV, and basic brightness vertex attributes; it adds no normal maps, PBR channels, shadows, ambient occlusion, or animation.
 
-After carving, every column is rescanned from the sky downward. Only the first solid block may become GRASS, and only when it is within Y=57 through Y=63. All other surviving grass is converted to ROCK, preventing grass on cave walls or deep cave floors without direct vertical sunlight.
+## Atlas boundary protection
 
-## Chunk invalidation and meshing
+`web/atlas.mjs` packs the two materials into one runtime atlas. Every `16 × 16` tile receives a one-pixel replicated gutter on all four sides. Tile UVs cover the complete interior texel rectangle while remaining slightly inside its mathematical boundary. Therefore interpolation and rasterization near an edge encounter a copy of the same material instead of the neighboring tile.
 
-`World.setBlock` marks the edited chunk dirty. When an edited block lies at local X or Z coordinate 0 or 15, the corresponding loaded neighboring chunk is also marked dirty. The cave result exposes all affected chunk positions for later selective rebuilds.
+`web/pixel-texture-sampling.mjs` configures `NEAREST` for both minification and magnification and uses `CLAMP_TO_EDGE` wrapping. The renderer does not call `generateMipmap` and selects no mipmap minification mode.
 
-The initial browser load still meshes all 256 chunks after cave carving and combines them into one indexed WebGL upload. Cross-chunk neighbor lookup suppresses duplicate internal faces while preserving faces exposed by tunnels crossing chunk boundaries.
+## Retained generation tool
 
-## Player and cave presentation
+`tools/generate-block-textures.mjs` imports the exact runtime texture source and can write deterministic grass, rock, and padded-atlas PNG previews under `build/texture-previews/`. It uses only Node built-in modules. Preview generation is a development aid; the browser consumes the source RGBA pixels directly.
 
-The Phase 5 collision-enabled player remains exactly 0.60 blocks wide and 1.62 blocks high, with an eye height of 1.54 blocks. AIR remains passable and GRASS/ROCK remain solid, allowing the player to walk or fall into the generated caves.
+## Existing world and player systems
 
-At startup, the browser finds the substantial surface cave opening nearest the world center, chooses a safe grass spawn nearby, and faces the player toward the entrance. No player model is rendered.
+The Phase 6 finite terrain, sphere-worm caves, chunk seam handling, cave-adjacent spawn, and the Phase 5 collision-enabled first-person player remain unchanged. The complete cave-aware world still renders as one aggregate indexed WebGL draw call.
 
 ## Testing
 
-Node tests verify deterministic cave output, seed variation, Y=0 preservation, a selected seed reaching Y=1, valid block types, direct-sunlight grass rules, dirty-chunk propagation across a chunk boundary, and seam-aware chunk meshing.
+Node tests verify stable texture checksums, full opacity, color distinction, green and neutral-gray palette characteristics, exact replicated gutters, bleeding-safe UV bounds, identical tile selection and UV order on every face of both block types, nearest-only sampling, disabled mipmaps, and deterministic PNG encoding.
 
-The Chromium smoke test loads both Pages entry points and requires Phase 6 state, WebGL 2, visible cave-aware geometry, one draw call, 256 chunks, the expected default-seed cave statistics, a solid bottom layer, a grounded first-person player, and zero WebGL errors.
+The Chromium smoke test loads both GitHub Pages entry points and requires the Phase 7 title and texture metadata, original procedural provenance, `16 × 16` resolution, a one-pixel gutter, nearest filtering, disabled mipmaps, visible cave-world geometry, one draw call, and zero WebGL errors.
 
 ## Scope boundary
 
-Phase 6 does not add modern ravines, aquifers, water, lava, ores, dungeons, biomes, block interaction, inventory, enemies, sound, or persistence.
+Phase 7 does not add lighting, shadows, ambient occlusion, normal maps, PBR materials, animated textures, dirt, additional block types, block interaction, inventory, enemies, sound, or persistence.

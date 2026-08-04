@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ATLAS_TILES, createAtlasPixels, getTileUv } from "../atlas.mjs";
+import {
+    ATLAS_HEIGHT,
+    ATLAS_TILES,
+    ATLAS_WIDTH,
+    createAtlasPixels,
+    getTilePixelBounds,
+    getTileUv,
+} from "../atlas.mjs";
 import { CUBE_FACE_NORMALS, VERTEX_FLOATS, createVoxelMesh } from "../mesh.mjs";
 
 function position(vertices,index){ const offset=index*VERTEX_FLOATS; return [vertices[offset],vertices[offset+1],vertices[offset+2]]; }
@@ -14,10 +21,16 @@ test("atlas tiles use inset non-overlapping coordinates",()=>{
     assert.equal(grass.v0,rock.v0); assert.equal(grass.v1,rock.v1);
 });
 
-test("original atlas contains opaque distinct tiles",()=>{
+test("original atlas contains opaque distinct padded tiles",()=>{
     const pixels=createAtlasPixels();
-    assert.equal(pixels.length,32*16*4); assert.equal(pixels[3],255); assert.equal(pixels[16*4+3],255);
-    assert.notDeepEqual([...pixels.slice(0,3)],[...pixels.slice(16*4,16*4+3)]);
+    const grass=getTilePixelBounds(ATLAS_TILES.grass);
+    const rock=getTilePixelBounds(ATLAS_TILES.rock);
+    const grassOffset=(grass.y0*ATLAS_WIDTH+grass.x0)*4;
+    const rockOffset=(rock.y0*ATLAS_WIDTH+rock.x0)*4;
+    assert.equal(pixels.length,ATLAS_WIDTH*ATLAS_HEIGHT*4);
+    assert.equal(pixels[grassOffset+3],255);
+    assert.equal(pixels[rockOffset+3],255);
+    assert.notDeepEqual([...pixels.slice(grassOffset,grassOffset+3)],[...pixels.slice(rockOffset,rockOffset+3)]);
 });
 
 test("one cube produces 24 vertices and 36 valid indices",()=>{

@@ -1,67 +1,82 @@
-export const ATLAS_TILE_SIZE = 16;
+import {
+    BLOCK_TEXTURE_SIZE,
+    BlockMaterial,
+    generateBlockTexture,
+} from "./block-textures.mjs";
+
+export const ATLAS_TILE_SIZE = BLOCK_TEXTURE_SIZE;
+export const ATLAS_GUTTER = 1;
+export const ATLAS_TILE_STRIDE = ATLAS_TILE_SIZE + ATLAS_GUTTER * 2;
 export const ATLAS_COLUMNS = 2;
 export const ATLAS_ROWS = 1;
-export const ATLAS_WIDTH = ATLAS_TILE_SIZE * ATLAS_COLUMNS;
-export const ATLAS_HEIGHT = ATLAS_TILE_SIZE * ATLAS_ROWS;
+export const ATLAS_WIDTH = ATLAS_TILE_STRIDE * ATLAS_COLUMNS;
+export const ATLAS_HEIGHT = ATLAS_TILE_STRIDE * ATLAS_ROWS;
 
 export const ATLAS_TILES = Object.freeze({ grass: 0, rock: 1 });
 
-export function getTileUv(tileIndex) {
+const UV_EDGE_EPSILON_TEXELS = 1 / 1024;
+
+export function getTilePixelBounds(tileIndex) {
     validateTileIndex(tileIndex);
     const tileX = tileIndex % ATLAS_COLUMNS;
     const tileY = Math.floor(tileIndex / ATLAS_COLUMNS);
-    const halfTexelU = 0.5 / ATLAS_WIDTH;
-    const halfTexelV = 0.5 / ATLAS_HEIGHT;
+    const x0 = tileX * ATLAS_TILE_STRIDE + ATLAS_GUTTER;
+    const y0 = tileY * ATLAS_TILE_STRIDE + ATLAS_GUTTER;
     return Object.freeze({
-        u0: tileX / ATLAS_COLUMNS + halfTexelU,
-        v0: tileY / ATLAS_ROWS + halfTexelV,
-        u1: (tileX + 1) / ATLAS_COLUMNS - halfTexelU,
-        v1: (tileY + 1) / ATLAS_ROWS - halfTexelV,
+        x0,
+        y0,
+        x1: x0 + ATLAS_TILE_SIZE,
+        y1: y0 + ATLAS_TILE_SIZE,
+    });
+}
+
+export function getTileUv(tileIndex) {
+    const bounds = getTilePixelBounds(tileIndex);
+    return Object.freeze({
+        u0: (bounds.x0 + UV_EDGE_EPSILON_TEXELS) / ATLAS_WIDTH,
+        v0: (bounds.y0 + UV_EDGE_EPSILON_TEXELS) / ATLAS_HEIGHT,
+        u1: (bounds.x1 - UV_EDGE_EPSILON_TEXELS) / ATLAS_WIDTH,
+        v1: (bounds.y1 - UV_EDGE_EPSILON_TEXELS) / ATLAS_HEIGHT,
     });
 }
 
 export function createAtlasPixels() {
     const pixels = new Uint8Array(ATLAS_WIDTH * ATLAS_HEIGHT * 4);
-    paintTile(pixels, ATLAS_TILES.grass, grassPixel);
-    paintTile(pixels, ATLAS_TILES.rock, rockPixel);
+    copyTileWithReplicatedGutter(
+        pixels,
+        ATLAS_TILES.grass,
+        generateBlockTexture(BlockMaterial.GRASS),
+    );
+    copyTileWithReplicatedGutter(
+        pixels,
+        ATLAS_TILES.rock,
+        generateBlockTexture(BlockMaterial.ROCK),
+    );
     return pixels;
 }
 
-function paintTile(pixels, tileIndex, pixelGenerator) {
-    const tileX = (tileIndex % ATLAS_COLUMNS) * ATLAS_TILE_SIZE;
-    const tileY = Math.floor(tileIndex / ATLAS_COLUMNS) * ATLAS_TILE_SIZE;
-    for (let y = 0; y < ATLAS_TILE_SIZE; y += 1) {
-        for (let x = 0; x < ATLAS_TILE_SIZE; x += 1) {
-            const [red, green, blue] = pixelGenerator(x, y);
-            const offset = ((tileY + y) * ATLAS_WIDTH + tileX + x) * 4;
-            pixels[offset] = red;
-            pixels[offset + 1] = green;
-            pixels[offset + 2] = blue;
-            pixels[offset + 3] = 255;
+function copyTileWithReplicatedGutter(atlas, tileIndex, source) {
+    const bounds = getTilePixelBounds(tileIndex);
+    for (let relativeY = -ATLAS_GUTTER; relativeY < ATLAS_TILE_SIZE + ATLAS_GUTTER; relativeY += 1) {
+        for (let relativeX = -ATLAS_GUTTER; relativeX < ATLAS_TILE_SIZE + ATLAS_GUTTER; relativeX += 1) {
+            const sourceX = clamp(relativeX, 0, ATLAS_TILE_SIZE - 1);
+            const sourceY = clamp(relativeY, 0, ATLAS_TILE_SIZE - 1);
+            const destinationX = bounds.x0 + relativeX;
+            const destinationY = bounds.y0 + relativeY;
+            const sourceOffset = (sourceY * ATLAS_TILE_SIZE + sourceX) * 4;
+            const destinationOffset = (destinationY * ATLAS_WIDTH + destinationX) * 4;
+            atlas[destinationOffset] = source[sourceOffset];
+            atlas[destinationOffset + 1] = source[sourceOffset + 1];
+            atlas[destinationOffset + 2] = source[sourceOffset + 2];
+            atlas[destinationOffset + 3] = source[sourceOffset + 3];
         }
     }
 }
 
-function grassPixel(x, y) {
-    const variation = hash2d(x, y, 17) % 29;
-    const blade = ((x * 5 + y * 11) % 17 === 0) ? -24 : 0;
-    return [clampByte(66 + variation + blade), clampByte(142 + variation * 2 + blade), clampByte(61 + Math.floor(variation / 2) + blade)];
+function clamp(value, minimum, maximum) {
+    return Math.max(minimum, Math.min(maximum, value));
 }
 
-function rockPixel(x, y) {
-    const variation = hash2d(x, y, 43) % 45;
-    const seam = ((x + y * 3) % 19 === 0) ? -28 : 0;
-    const value = clampByte(91 + variation + seam);
-    return [value, clampByte(value + 2), clampByte(value + 5)];
-}
-
-function hash2d(x, y, seed) {
-    let value = Math.imul(x + seed, 374761393) ^ Math.imul(y + seed * 3, 668265263);
-    value = Math.imul(value ^ (value >>> 13), 1274126177);
-    return (value ^ (value >>> 16)) >>> 0;
-}
-
-function clampByte(value) { return Math.max(0, Math.min(255, value)); }
 function validateTileIndex(tileIndex) {
     if (!Number.isInteger(tileIndex) || tileIndex < 0 || tileIndex >= ATLAS_COLUMNS * ATLAS_ROWS) {
         throw new RangeError(`Invalid atlas tile index: ${tileIndex}`);
