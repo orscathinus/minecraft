@@ -30,8 +30,8 @@ import { World } from "../world.mjs";
 import { encodeRgbaPng } from "../../tools/generate-block-textures.mjs";
 
 const EXPECTED_CHECKSUMS = Object.freeze({
-    [BlockMaterial.GRASS]: 0x4949def5,
-    [BlockMaterial.ROCK]: 0xb7403f85,
+    [BlockMaterial.GRASS]: 0x3702e95e,
+    [BlockMaterial.ROCK]: 0xe8e78fb7,
 });
 
 test("original 16 x 16 textures are deterministic and opaque", () => {
@@ -48,19 +48,22 @@ test("original 16 x 16 textures are deterministic and opaque", () => {
     }
 });
 
-test("grass is mottled green and rock is dark irregular gray", () => {
+test("grass is bright fine-grained green and rock has pale cobbles with dark joints", () => {
     const grass = generateBlockTexture(BlockMaterial.GRASS);
     const rock = generateBlockTexture(BlockMaterial.ROCK);
     const grassAverage = averageRgb(grass);
     const rockAverage = averageRgb(rock);
 
+    assert.ok(grassAverage.green > 155);
     assert.ok(grassAverage.green > grassAverage.red * 1.8);
-    assert.ok(grassAverage.green > grassAverage.blue * 2.2);
+    assert.ok(grassAverage.green > grassAverage.blue * 3.5);
     assert.ok(Math.max(rockAverage.red, rockAverage.green, rockAverage.blue)
-        - Math.min(rockAverage.red, rockAverage.green, rockAverage.blue) < 10);
-    assert.ok((rockAverage.red + rockAverage.green + rockAverage.blue) / 3 < 85);
-    assert.ok(countDistinctRgb(grass) >= 6);
-    assert.ok(countDistinctRgb(rock) >= 6);
+        - Math.min(rockAverage.red, rockAverage.green, rockAverage.blue) < 1);
+    assert.ok(rockAverage.red > 100 && rockAverage.red < 145);
+    assert.ok(countPixelsByLuminance(rock, value => value < 35) >= 60);
+    assert.ok(countPixelsByLuminance(rock, value => value > 190) >= 40);
+    assert.ok(countDistinctRgb(grass) >= 8);
+    assert.ok(countDistinctRgb(rock) >= 9);
 
     let differentChannels = 0;
     for (let index = 0; index < grass.length; index += 1) {
@@ -181,6 +184,15 @@ function countDistinctRgb(pixels) {
         values.add(`${pixels[offset]},${pixels[offset + 1]},${pixels[offset + 2]}`);
     }
     return values.size;
+}
+
+function countPixelsByLuminance(pixels, predicate) {
+    let count = 0;
+    for (let offset = 0; offset < pixels.length; offset += 4) {
+        const luminance = (pixels[offset] + pixels[offset + 1] + pixels[offset + 2]) / 3;
+        if (predicate(luminance)) count += 1;
+    }
+    return count;
 }
 
 function atlasPixel(pixels, x, y) {
