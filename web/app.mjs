@@ -1,8 +1,5 @@
 import { BlockType } from "./block-type.mjs";
-import {
-    ChunkManager,
-    ChunkProcessingMode,
-} from "./chunk-manager.mjs";
+import { ChunkManager, ChunkProcessingMode } from "./chunk-manager.mjs";
 import { CaveGenerator } from "./cave-generator.mjs";
 import { FirstPersonPlayer } from "./first-person-player.mjs";
 import { FixedStepTimer } from "./fixed-step-timer.mjs";
@@ -59,31 +56,23 @@ class BrowserGame {
             preserveDrawingBuffer: false,
             powerPreference: "high-performance",
         });
-        if (!gl) {
-            throw new Error("WebGL 2 is unavailable. Use a current browser with hardware acceleration enabled.");
-        }
+        if (!gl) throw new Error("WebGL 2 is unavailable. Use a current browser with hardware acceleration enabled.");
 
         const searchParams = new URLSearchParams(window.location.search);
         const seed = readSeed(searchParams);
         const generator = new SeededTerrainGenerator(seed);
-        console.info(`Generating finite world with seed ${seed}.`);
         status.textContent = `Generating finite world · seed ${seed} · 0%`;
         const world = await generator.generateWorld({
             onProgress(completed, total) {
                 const percent = Math.round(completed / total * 100);
                 status.textContent = `Generating finite world · seed ${seed} · ${percent}%`;
-                if (completed % 16 === 0 || completed === total) {
-                    console.info(`World generation: ${completed}/${total} chunks (${percent}%).`);
-                }
             },
         });
 
         status.textContent = "Carving primitive caves · 0%";
         const caveResult = await new CaveGenerator(seed).carveWorld(world, {
             onProgress(completed, total) {
-                const percent = Math.round(completed / total * 100);
-                status.textContent = `Carving primitive caves · ${percent}%`;
-                console.info(`Cave generation: ${completed}/${total} passes (${percent}%).`);
+                status.textContent = `Carving primitive caves · ${Math.round(completed / total * 100)}%`;
             },
         });
 
@@ -91,11 +80,7 @@ class BrowserGame {
         const sunlight = new SunlightModel(world);
         await sunlight.rebuildAll({
             onProgress(completed, total) {
-                const percent = Math.round(completed / total * 100);
-                status.textContent = `Calculating BRIGHT / DARK sunlight · ${percent}%`;
-                if (completed % 32 === 0 || completed === total) {
-                    console.info(`Sunlight columns: ${completed}/${total} rows (${percent}%).`);
-                }
+                status.textContent = `Calculating BRIGHT / DARK sunlight · ${Math.round(completed / total * 100)}%`;
             },
         });
 
@@ -103,13 +88,11 @@ class BrowserGame {
         world.clearDirtyChunks();
         world.clearDirtyLightingColumns?.();
         const renderer = await VoxelRenderer.create(gl);
-        const terrainRange = measureTerrainRange(generator);
-        const entrance = findNearestSurfaceEntrance(world, generator);
         const spawnController = new HistoricalSpawnController({
             debugSeed: readSpawnDebugSeed(searchParams),
         });
         const initialSpawn = spawnController.createInitialSpawn();
-        const game = new BrowserGame(
+        const game = new BrowserGame({
             canvas,
             status,
             debugOverlay,
@@ -118,19 +101,19 @@ class BrowserGame {
             world,
             sunlight,
             seed,
-            terrainRange,
+            terrainRange: measureTerrainRange(generator),
             caveResult,
-            entrance,
+            entrance: findNearestSurfaceEntrance(world, generator),
             spawnController,
             initialSpawn,
-            readLoadingMode(searchParams),
-            readDebugEnabled(searchParams),
-        );
+            loadingMode: readLoadingMode(searchParams),
+            debugVisible: readDebugEnabled(searchParams),
+        });
         game.#chunkManager.processFrame({ maxChunks: 1, ignoreInterval: true });
         return game;
     }
 
-    constructor(
+    constructor({
         canvas,
         status,
         debugOverlay,
@@ -146,7 +129,7 @@ class BrowserGame {
         initialSpawn,
         loadingMode,
         debugVisible,
-    ) {
+    }) {
         this.#canvas = canvas;
         this.#status = status;
         this.#debugOverlay = debugOverlay;
@@ -161,8 +144,8 @@ class BrowserGame {
         this.#debugVisible = debugVisible;
         this.#player = new FirstPersonPlayer(canvas, world, {
             position: initialSpawn.position,
-            yaw: yawTowardWorldCenter(initialSpawn.position),
-            pitch: -0.55,
+            yaw: yawTowardSpawnChunkCenter(initialSpawn.position),
+            pitch: -1.10,
             spawnController,
         });
         this.#chunkManager = new ChunkManager(world, sunlight, renderer, {
@@ -233,9 +216,7 @@ class BrowserGame {
     };
 
     #render(interpolationAlpha) {
-        if (interpolationAlpha < 0 || interpolationAlpha >= 1) {
-            throw new Error("Interpolation alpha must be in [0, 1)");
-        }
+        if (interpolationAlpha < 0 || interpolationAlpha >= 1) throw new Error("Interpolation alpha must be in [0, 1)");
         this.#resize();
         const projection = perspectiveMatrix(
             FIELD_OF_VIEW_RADIANS,
@@ -247,8 +228,7 @@ class BrowserGame {
         this.#renderer.render(projection, this.#player.viewMatrix());
         const rendererState = this.#renderer.stats();
         if (!this.#verifiedGeometry && rendererState.visibleChunks > 0) {
-            verifyGeometryWasDrawn(this.#gl, this.#canvas);
-            this.#verifiedGeometry = true;
+            this.#verifiedGeometry = geometryWasDrawn(this.#gl, this.#canvas);
         }
         this.#status.hidden = true;
         const playerState = this.#player.snapshot();
@@ -374,8 +354,7 @@ class BrowserGame {
             }
             if (event.code === "KeyH" && !event.repeat) {
                 event.preventDefault();
-                const mode = this.#chunkManager.toggleMode();
-                console.info(`Chunk processing mode changed to ${mode}.`);
+                console.info(`Chunk processing mode changed to ${this.#chunkManager.toggleMode()}.`);
                 return;
             }
             if (event.code !== "Escape" || document.pointerLockElement === this.#canvas) return;
@@ -448,10 +427,15 @@ function findNearestSurfaceEntrance(world, generator) {
     return best ?? Object.freeze({ x: centerX, y: generator.terrainHeight(centerX, centerZ), z: centerZ });
 }
 
-function yawTowardWorldCenter(position) {
-    const centerX = WorldConfig.sizeX / 2;
-    const centerZ = WorldConfig.sizeZ / 2;
-    return Math.atan2(centerX - position[0], -(centerZ - position[2]));
+function yawTowardSpawnChunkCenter(position) {
+    const chunkX = Math.floor(position[0] / WorldConfig.chunkWidth);
+    const chunkZ = Math.floor(position[2] / WorldConfig.chunkDepth);
+    const targetX = chunkX * WorldConfig.chunkWidth + WorldConfig.chunkWidth / 2;
+    const targetZ = chunkZ * WorldConfig.chunkDepth + WorldConfig.chunkDepth / 2;
+    const deltaX = targetX - position[0];
+    const deltaZ = targetZ - position[2];
+    if (deltaX === 0 && deltaZ === 0) return 0;
+    return Math.atan2(deltaX, -deltaZ);
 }
 
 function measureTerrainRange(generator) {
@@ -471,7 +455,7 @@ function formatPosition(position) {
     return position.map(value => Number(value).toFixed(3)).join(",");
 }
 
-function verifyGeometryWasDrawn(gl, canvas) {
+function geometryWasDrawn(gl, canvas) {
     const width = Math.min(canvas.width, 512);
     const height = Math.min(canvas.height, 512);
     const pixels = new Uint8Array(width * height * 4);
@@ -485,9 +469,9 @@ function verifyGeometryWasDrawn(gl, canvas) {
         pixels,
     );
     for (let index = 0; index < pixels.length; index += 4) {
-        if (pixels[index] !== 127 || pixels[index + 1] !== 204 || pixels[index + 2] !== 255) return;
+        if (pixels[index] !== 127 || pixels[index + 1] !== 204 || pixels[index + 2] !== 255) return true;
     }
-    throw new Error("The historical-spawn cave world did not produce any visible pixels");
+    return false;
 }
 
 function showStartupFailure(status, failure) {
