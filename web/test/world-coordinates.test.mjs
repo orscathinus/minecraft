@@ -12,7 +12,7 @@ import {
     localCoordinate,
 } from "../world-coordinates.mjs";
 
-test("global and local coordinates convert across positive and negative chunk boundaries", () => {
+test("coordinate utilities remain mathematically correct across positive and negative boundaries", () => {
     const cases = [
         [-17,-2,15],[-16,-1,0],[-1,-1,15],[0,0,0],
         [15,0,15],[16,1,0],[31,1,15],[32,2,0],
@@ -26,15 +26,18 @@ test("global and local coordinates convert across positive and negative chunk bo
     assert.deepEqual(globalToLocalPosition(-1, 16), { x: 15, z: 0 });
 });
 
-test("world lookup is safe at missing chunks and fixed-height boundaries", () => {
+test("finite world lookup is safe at horizontal and vertical boundaries", () => {
     const world = new World();
-    const chunk = new Chunk(new ChunkPosition(-1, 0));
-    chunk.setBlock(15, 2, 0, BlockType.ROCK);
+    const chunk = new Chunk(new ChunkPosition(0, 0));
+    chunk.setBlock(0, 2, 0, BlockType.ROCK);
     world.addChunk(chunk);
 
-    assert.equal(world.getBlock(-1, 2, 0), BlockType.ROCK);
-    assert.equal(world.getBlock(0, 2, 0), BlockType.AIR);
-    assert.equal(world.getBlock(-1, -1, 0), BlockType.AIR);
-    assert.equal(world.getBlock(-1, 64, 0), BlockType.AIR);
-    assert.equal(world.setBlock(0, 2, 0, BlockType.GRASS), false);
+    assert.equal(world.getBlock(0, 2, 0), BlockType.ROCK);
+    assert.equal(world.getBlock(-1, 2, 0), BlockType.AIR);
+    assert.equal(world.getBlock(256, 2, 0), BlockType.AIR);
+    assert.equal(world.getBlock(0, -1, 0), BlockType.AIR);
+    assert.equal(world.getBlock(0, 64, 0), BlockType.AIR);
+    assert.equal(world.getBlock(0, 2, 256), BlockType.AIR);
+    assert.equal(world.setBlock(-1, 2, 0, BlockType.GRASS), false);
+    assert.equal(world.setBlock(256, 2, 0, BlockType.GRASS), false);
 });
