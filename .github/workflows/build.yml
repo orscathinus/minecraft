@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: build-${{ github.head_ref || github.ref_name }}
@@ -31,6 +31,19 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
       - name: Clean build and package desktop reference
         run: ./gradlew --no-daemon clean build distZip distTar
+      - name: Verify packaged browser documentation and screenshots
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(find build/distributions -maxdepth 1 -name '*.zip' -print -quit)"
+          unzip -l "${package}" | grep -q 'browser/index.html'
+          unzip -l "${package}" | grep -q 'browser/web/app.mjs'
+          unzip -l "${package}" | grep -q 'KNOWN_DEVIATIONS.md'
+          unzip -l "${package}" | grep -q 'FINAL_TEST_REPORT.md'
+          unzip -l "${package}" | grep -q 'docs/screenshots/surface.png'
+          unzip -l "${package}" | grep -q 'docs/screenshots/cave.png'
+          unzip -l "${package}" | grep -q 'docs/screenshots/chunk-loading.png'
+          unzip -l "${package}" | grep -q 'docs/screenshots/void.png'
       - name: Smoke-test the desktop OpenGL application
         run: xvfb-run -a ./gradlew --no-daemon smokeTest
       - name: Validate browser modules and tests
@@ -61,27 +74,6 @@ jobs:
           test -s build/screenshots/cave.png
           test -s build/screenshots/chunk-loading.png
           test -s build/screenshots/void.png
-      - name: Persist first successful screenshots
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          HEAD_BRANCH: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-          if git cat-file -e "origin/${HEAD_BRANCH}:docs/screenshots/surface.png" 2>/dev/null; then
-            echo "Final screenshots are already present on ${HEAD_BRANCH}."
-            exit 0
-          fi
-          mkdir -p /tmp/phase12-screenshots
-          cp build/screenshots/*.png /tmp/phase12-screenshots/
-          git fetch origin "${HEAD_BRANCH}"
-          git checkout -B "${HEAD_BRANCH}" "origin/${HEAD_BRANCH}"
-          mkdir -p docs/screenshots
-          cp /tmp/phase12-screenshots/*.png docs/screenshots/
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/screenshots
-          git commit -m "Add final browser screenshots"
-          git push origin "HEAD:${HEAD_BRANCH}"
       - name: Upload Phase 12 package and evidence
         uses: actions/upload-artifact@v4
         with:
