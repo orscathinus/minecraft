@@ -14,27 +14,46 @@ The primary public build is a browser-playable application hosted by GitHub Page
 
 The browser build lives in `web/`. A root `index.html` loads the same modules for branch-based GitHub Pages.
 
-## Phase 2 rendering behavior
+## Phase 3 block and chunk behavior
 
-Phase 2 adds the first reusable voxel rendering path:
+Phase 3 adds the first finite voxel data and chunk-meshing path to the public browser target:
 
-- 70-degree perspective projection updated from canvas aspect ratio;
-- temporary mouse, arrow-key, and free-movement debug camera;
-- indexed cube geometry with counter-clockwise winding;
-- depth testing and back-face culling;
-- interleaved position, texture-coordinate, and brightness attributes;
-- original generated `32 × 16` atlas with grass and rock `16 × 16` tiles;
-- nearest-neighbor texture filtering;
-- explicit VAO, VBO, EBO, texture, shader, and program disposal.
+- exactly three block values: AIR, GRASS, and ROCK;
+- one `Uint8Array` with 16,384 entries for each `16 × 64 × 16` chunk;
+- immutable integer horizontal chunk positions;
+- global-to-chunk, global-to-local, and local-to-global conversions that support negative coordinates;
+- bounds-safe reads that return AIR for unavailable chunks and Y coordinates outside `0..63`;
+- a loaded-chunk registry for neighbor lookup;
+- CPU-side `ChunkMesh` data separated from WebGL upload;
+- `ChunkMesher` generation of only faces adjacent to AIR or unavailable world data;
+- shared-face removal within chunks and across loaded chunk borders;
+- per-vertex position, texture coordinate, and brightness data;
+- one indexed draw for the deterministic test chunk.
 
-Both cubes are combined into one aggregate mesh and rendered with one draw call. The renderer accepts reusable mesh data intended for later chunk meshes rather than issuing one draw call per block.
+The renderer can replace its uploaded mesh, so later block edits or chunk-neighbor changes can rebuild and re-upload a chunk without changing the WebGL abstraction.
+
+## Deterministic test chunk
+
+The Phase 3 browser scene is deliberately authored rather than procedurally generated. It contains a rock floor, four low perimeter walls, a doorway, a rock ridge, a two-block-wide and three-block-high empty tunnel, and six grass blocks. The resulting optimized mesh contains 1,220 visible faces and is drawn once.
 
 ## Testing
 
-Node tests verify atlas bounds, half-texel inset coordinates, distinct opaque atlas pixels, vertex/index counts, valid indices, outward winding on all six faces, multi-cube aggregation, perspective resizing behavior, and view-matrix behavior.
+Node tests verify:
 
-The Chromium smoke test serves both Pages entry points, loads shader resources, creates WebGL 2, uploads the atlas and indexed mesh, performs one draw call, checks for WebGL errors, and verifies that geometry changes pixels away from the sky clear color.
+- the 16,384-entry compact storage size;
+- every coordinate-to-index result and uniqueness across the full chunk;
+- positive and negative global/local coordinate boundaries;
+- safe missing-chunk and vertical-boundary access;
+- zero geometry for AIR;
+- six faces for one isolated block;
+- ten faces for two adjacent blocks;
+- twenty-four faces for a solid `2 × 2 × 2` arrangement;
+- shared-face removal across a loaded chunk boundary;
+- visible boundary faces when neighboring world data is unavailable;
+- the deterministic test chunk's stable 1,220-face result.
+
+The Chromium smoke test serves both Pages entry points, creates WebGL 2, uploads the generated chunk mesh, verifies visible pixels, and requires one chunk, one draw call, 1,220 faces, and zero WebGL errors.
 
 ## Scope boundary
 
-Phase 2 does not add terrain, collision, caves, chunks, world generation, block interaction, or a player entity.
+Phase 3 does not add procedural terrain, caves, collision, a player entity, gravity, block breaking, block placement, chunk scheduling, or world persistence.
