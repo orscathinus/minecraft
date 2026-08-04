@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: build-${{ github.head_ref || github.ref_name }}
@@ -74,6 +74,29 @@ jobs:
           test -s build/screenshots/cave.png
           test -s build/screenshots/chunk-loading.png
           test -s build/screenshots/void.png
+      - name: Persist corrected texture screenshots
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cave-game-texture-fix
+          cp build/screenshots/*.png /tmp/cave-game-texture-fix/
+          git fetch origin "${HEAD_BRANCH}"
+          git checkout -B "${HEAD_BRANCH}" "origin/${HEAD_BRANCH}"
+          if cmp -s /tmp/cave-game-texture-fix/surface.png docs/screenshots/surface.png \
+            && cmp -s /tmp/cave-game-texture-fix/cave.png docs/screenshots/cave.png \
+            && cmp -s /tmp/cave-game-texture-fix/chunk-loading.png docs/screenshots/chunk-loading.png \
+            && cmp -s /tmp/cave-game-texture-fix/void.png docs/screenshots/void.png; then
+            echo "Corrected screenshots are already committed."
+            exit 0
+          fi
+          cp /tmp/cave-game-texture-fix/*.png docs/screenshots/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots
+          git commit -m "Update screenshots for corrected textures"
+          git push origin "HEAD:${HEAD_BRANCH}"
       - name: Upload Phase 12 package and evidence
         uses: actions/upload-artifact@v4
         with:
