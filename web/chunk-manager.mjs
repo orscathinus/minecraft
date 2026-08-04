@@ -47,7 +47,9 @@ export class ChunkPriorityQueue {
         while (index > 0) {
             const parent = Math.floor((index - 1) / 2);
             if (compareWork(this.#items[parent], this.#items[index]) <= 0) break;
-            [this.#items[parent], this.#items[index]] = [this.#items[index], this.#items[parent]];
+            const swap = this.#items[parent];
+            this.#items[parent] = this.#items[index];
+            this.#items[index] = swap;
             index = parent;
         }
     }
@@ -63,7 +65,9 @@ export class ChunkPriorityQueue {
             if (right < this.#items.length
                 && compareWork(this.#items[right], this.#items[smallest]) < 0) smallest = right;
             if (smallest === index) return;
-            [this.#items[index], this.#items[smallest]] = [this.#items[smallest], this.#items[index]];
+            const swap = this.#items[index];
+            this.#items[index] = this.#items[smallest];
+            this.#items[smallest] = swap;
             index = smallest;
         }
     }
@@ -74,6 +78,7 @@ export class ChunkManager {
     #sunlight;
     #renderer;
     #mesher;
+    #clock;
     #queue = new ChunkPriorityQueue();
     #records = new Map();
     #playerChunk;
@@ -84,27 +89,33 @@ export class ChunkManager {
     #meshedKeys = new Set();
     #visibleKeys = new Set();
     #uploadCounts = new Map();
+    #queuedCount = 0;
+    #peakPendingChunks = 0;
     #totalUploads = 0;
     #unnecessaryDuplicateUploads = 0;
     #firstVisibleChunk = null;
     #lastProcessedChunk = null;
+    #meshJobs = 0;
+    #totalChunkMeshMs = 0;
+    #maximumChunkMeshMs = 0;
 
     constructor(world, sunlight, renderer, {
         playerPosition = [0, 0, 0],
         mode = ChunkProcessingMode.NORMAL,
         modeConfig = null,
         mesher = new ChunkMesher(),
+        clock = performanceNow,
     } = {}) {
         requireWorld(world);
         requireSunlight(sunlight);
         requireRenderer(renderer);
-        if (!mesher || typeof mesher.build !== "function") {
-            throw new TypeError("ChunkManager requires a chunk mesher");
-        }
+        if (!mesher || typeof mesher.build !== "function") throw new TypeError("ChunkManager requires a chunk mesher");
+        if (typeof clock !== "function") throw new TypeError("ChunkManager clock must be a function");
         this.#world = world;
         this.#sunlight = sunlight;
         this.#renderer = renderer;
         this.#mesher = mesher;
+        this.#clock = clock;
         this.#mode = validateMode(mode);
         this.#modeConfig = normalizeModeConfig(modeConfig);
         this.#playerChunk = chunkFromWorldPosition(playerPosition[0], playerPosition[2]);
@@ -117,7 +128,9 @@ export class ChunkManager {
                 reason: "initial",
                 revision: 0,
             });
+            this.#queuedCount += 1;
         }
+        this.#peakPendingChunks = this.#queuedCount;
         this.#rebuildQueue();
     }
 
@@ -144,42 +157,12 @@ export class ChunkManager {
         return this.#mode;
     }
 
-    processFrame({ maxChunks = null, ignoreInterval = false } = {}) {
-        this.#enqueueDirtyChunks();
-        this.#frameCounter += 1;
-        const config = this.#modeConfig[this.#mode];
-        if (!ignoreInterval && this.#frameCounter % config.frameInterval !== 0) return Object.freeze([]);
-        const budget = maxChunks === null ? config.maxChunksPerFrame : validateBudget(maxChunks);
-        const processed = [];
+    processFrame({ maxChunks = null, ignoreInterval = false, collectResults = true } = {}) {
+        return this.#process(maxChunks, ignoreInterval, collectResults);
+    }
 
-        while (processed.length < budget && !this.#queue.empty) {
-            const work = this.#queue.dequeue();
-            if (!work || work.epoch !== this.#epoch) continue;
-            const record = this.#records.get(work.key);
-            if (!record || record.state !== "queued" || record.revision !== work.revision) continue;
-            const chunk = this.#world.getChunk(record.position);
-            if (!chunk) continue;
-
-            const mesh = this.#mesher.build(chunk, this.#world, this.#sunlight);
-            record.state = "visible";
-            this.#meshedKeys.add(work.key);
-            const previousUploads = this.#uploadCounts.get(work.key) ?? 0;
-            if (previousUploads > 0 && record.reason !== "refresh") {
-                this.#unnecessaryDuplicateUploads += 1;
-            }
-            this.#renderer.uploadChunkMesh(record.position, mesh, { reason: record.reason });
-            this.#uploadCounts.set(work.key, previousUploads + 1);
-            this.#totalUploads += 1;
-            this.#visibleKeys.add(work.key);
-            if (this.#firstVisibleChunk === null) this.#firstVisibleChunk = record.position;
-            this.#lastProcessedChunk = record.position;
-            processed.push(Object.freeze({
-                position: record.position,
-                reason: record.reason,
-                distanceSquared: work.distanceSquared,
-            }));
-        }
-        return Object.freeze(processed);
+    processFrameFast() {
+        return this.#process(null, false, false);
     }
 
     queueRefresh(positionOrX, z = undefined) {
@@ -188,34 +171,38 @@ export class ChunkManager {
             : new ChunkPosition(positionOrX, z);
         const record = this.#records.get(position.key());
         if (!record) return false;
-        record.reason = "refresh";
-        record.revision += 1;
-        record.state = "queued";
+        this.#queueRecord(record, "refresh");
         this.#rebuildQueue();
         return true;
     }
 
+    writeSnapshot(target) {
+        if (!target || typeof target !== "object") throw new TypeError("chunk snapshot target must be an object");
+        const config = this.#modeConfig[this.#mode];
+        target.playerChunk = this.#playerChunk;
+        target.queued = this.#queuedCount;
+        target.meshed = this.#meshedKeys.size;
+        target.visible = this.#visibleKeys.size;
+        target.totalChunks = this.#records.size;
+        target.mode = this.#mode;
+        target.maxChunksPerFrame = config.maxChunksPerFrame;
+        target.frameInterval = config.frameInterval;
+        target.totalUploads = this.#totalUploads;
+        target.unnecessaryDuplicateUploads = this.#unnecessaryDuplicateUploads;
+        target.firstVisibleChunk = this.#firstVisibleChunk;
+        target.lastProcessedChunk = this.#lastProcessedChunk;
+        target.complete = this.#queuedCount === 0;
+        target.epoch = this.#epoch;
+        target.peakPendingChunks = this.#peakPendingChunks;
+        target.meshJobs = this.#meshJobs;
+        target.totalChunkMeshMs = this.#totalChunkMeshMs;
+        target.averageChunkMeshMs = this.#meshJobs === 0 ? 0 : this.#totalChunkMeshMs / this.#meshJobs;
+        target.maximumChunkMeshMs = this.#maximumChunkMeshMs;
+        return target;
+    }
+
     snapshot() {
-        let queued = 0;
-        for (const record of this.#records.values()) {
-            if (record.state === "queued") queued += 1;
-        }
-        return Object.freeze({
-            playerChunk: this.#playerChunk,
-            queued,
-            meshed: this.#meshedKeys.size,
-            visible: this.#visibleKeys.size,
-            totalChunks: this.#records.size,
-            mode: this.#mode,
-            maxChunksPerFrame: this.#modeConfig[this.#mode].maxChunksPerFrame,
-            frameInterval: this.#modeConfig[this.#mode].frameInterval,
-            totalUploads: this.#totalUploads,
-            unnecessaryDuplicateUploads: this.#unnecessaryDuplicateUploads,
-            firstVisibleChunk: this.#firstVisibleChunk,
-            lastProcessedChunk: this.#lastProcessedChunk,
-            complete: queued === 0,
-            epoch: this.#epoch,
-        });
+        return Object.freeze(this.writeSnapshot({}));
     }
 
     dispose() {
@@ -224,6 +211,64 @@ export class ChunkManager {
         this.#meshedKeys.clear();
         this.#visibleKeys.clear();
         this.#uploadCounts.clear();
+        this.#queuedCount = 0;
+    }
+
+    #process(maxChunks, ignoreInterval, collectResults) {
+        this.#enqueueDirtyChunks();
+        this.#frameCounter += 1;
+        const config = this.#modeConfig[this.#mode];
+        if (!ignoreInterval && this.#frameCounter % config.frameInterval !== 0) {
+            return collectResults ? Object.freeze([]) : 0;
+        }
+        const budget = maxChunks === null ? config.maxChunksPerFrame : validateBudget(maxChunks);
+        const processed = collectResults ? [] : null;
+        let processedCount = 0;
+
+        while (processedCount < budget && !this.#queue.empty) {
+            const work = this.#queue.dequeue();
+            if (!work || work.epoch !== this.#epoch) continue;
+            const record = this.#records.get(work.key);
+            if (!record || record.state !== "queued" || record.revision !== work.revision) continue;
+            const chunk = this.#world.getChunk(record.position);
+            if (!chunk) continue;
+
+            const started = this.#clock();
+            const mesh = this.#mesher.build(chunk, this.#world, this.#sunlight);
+            const meshMs = Math.max(0, this.#clock() - started);
+            this.#meshJobs += 1;
+            this.#totalChunkMeshMs += meshMs;
+            this.#maximumChunkMeshMs = Math.max(this.#maximumChunkMeshMs, meshMs);
+
+            const previousUploads = this.#uploadCounts.get(work.key) ?? 0;
+            if (previousUploads > 0 && record.reason !== "refresh") this.#unnecessaryDuplicateUploads += 1;
+
+            try {
+                this.#renderer.uploadChunkMesh(record.position, mesh, { reason: record.reason });
+            } catch (failure) {
+                this.#rebuildQueue();
+                throw failure;
+            }
+
+            record.state = "visible";
+            this.#queuedCount -= 1;
+            this.#meshedKeys.add(work.key);
+            this.#uploadCounts.set(work.key, previousUploads + 1);
+            this.#totalUploads += 1;
+            this.#visibleKeys.add(work.key);
+            if (this.#firstVisibleChunk === null) this.#firstVisibleChunk = record.position;
+            this.#lastProcessedChunk = record.position;
+            processedCount += 1;
+            if (collectResults) {
+                processed.push(Object.freeze({
+                    position: record.position,
+                    reason: record.reason,
+                    distanceSquared: work.distanceSquared,
+                    meshMilliseconds: meshMs,
+                }));
+            }
+        }
+        return collectResults ? Object.freeze(processed) : processedCount;
     }
 
     #enqueueDirtyChunks() {
@@ -233,12 +278,20 @@ export class ChunkManager {
         for (const position of dirty) {
             const record = this.#records.get(position.key());
             if (!record) continue;
-            record.reason = "refresh";
-            record.revision += 1;
-            record.state = "queued";
+            this.#queueRecord(record, "refresh");
             changed = true;
         }
         if (changed) this.#rebuildQueue();
+    }
+
+    #queueRecord(record, reason) {
+        if (record.state !== "queued") {
+            record.state = "queued";
+            this.#queuedCount += 1;
+            this.#peakPendingChunks = Math.max(this.#peakPendingChunks, this.#queuedCount);
+        }
+        record.reason = reason;
+        record.revision += 1;
     }
 
     #rebuildQueue() {
@@ -260,9 +313,7 @@ export class ChunkManager {
 }
 
 export function chunkFromWorldPosition(x, z) {
-    if (!Number.isFinite(x) || !Number.isFinite(z)) {
-        throw new TypeError("player position must be finite");
-    }
+    if (!Number.isFinite(x) || !Number.isFinite(z)) throw new TypeError("player position must be finite");
     return new ChunkPosition(
         clamp(Math.floor(x / WorldConfig.chunkWidth), 0, WorldConfig.chunksX - 1),
         clamp(Math.floor(z / WorldConfig.chunkDepth), 0, WorldConfig.chunksZ - 1),
@@ -296,16 +347,12 @@ function validateQueueItem(item) {
 }
 
 function validateMode(mode) {
-    if (!Object.values(ChunkProcessingMode).includes(mode)) {
-        throw new RangeError(`Unknown chunk processing mode: ${mode}`);
-    }
+    if (!Object.values(ChunkProcessingMode).includes(mode)) throw new RangeError(`Unknown chunk processing mode: ${mode}`);
     return mode;
 }
 
 function validateBudget(value) {
-    if (!Number.isInteger(value) || value < 1) {
-        throw new RangeError("chunk processing budgets must be positive integers");
-    }
+    if (!Number.isInteger(value) || value < 1) throw new RangeError("chunk processing budgets must be positive integers");
     return value;
 }
 
@@ -325,6 +372,10 @@ function requireRenderer(renderer) {
     if (!renderer || typeof renderer.uploadChunkMesh !== "function") {
         throw new TypeError("ChunkManager requires a chunk-capable renderer");
     }
+}
+
+function performanceNow() {
+    return globalThis.performance?.now?.() ?? Date.now();
 }
 
 function clamp(value, min, max) {
