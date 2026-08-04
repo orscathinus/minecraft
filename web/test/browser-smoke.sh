@@ -24,9 +24,12 @@ done
 for path in \
     index.html \
     web/index.html \
+    web/phase12-runtime-metadata.mjs \
     web/performance-diagnostics.mjs \
     web/benchmark.mjs \
     tools/benchmark-web.mjs \
+    tools/fidelity-audit.mjs \
+    tools/capture-screenshots.mjs \
     web/spawn-controller.mjs \
     web/player-physics.mjs \
     web/first-person-player.mjs \
@@ -86,10 +89,14 @@ run_chromium() {
 
 assert_shared_state() {
     local output="$1"
-    assert_dom 'Cave Game Tech Test Recreation · Phase 11' "${output}"
+    assert_dom 'Cave Game Tech Test Recreation · Phase 12' "${output}"
     assert_dom 'data-app-state="running"' "${output}"
     assert_dom 'data-webgl="2"' "${output}"
-    assert_dom 'data-phase="11"' "${output}"
+    assert_dom 'data-phase="12"' "${output}"
+    assert_dom 'data-release="complete-tech-test"' "${output}"
+    assert_dom 'data-fidelity-audit="passed-in-ci"' "${output}"
+    assert_dom 'data-block-interaction="none"' "${output}"
+    assert_dom 'data-packaging="github-pages-and-gradle-distribution"' "${output}"
     assert_dom 'data-texture-phase="7"' "${output}"
     assert_dom 'data-texture-version="phase-7-original-v1"' "${output}"
     assert_dom 'data-texture-size="16"' "${output}"
@@ -202,7 +209,7 @@ assert_historical_mode() {
     assert_dom 'data-chunk-frame-interval="10"' "${output}"
     assert_dom 'data-chunks-queued="[1-9][0-9]*"' "${output}"
     assert_dom 'data-chunk-loading-complete="false"' "${output}"
-    assert_dom 'PHASE 11 DIAGNOSTICS' "${output}"
+    assert_dom 'FINAL DIAGNOSTICS' "${output}"
     assert_dom 'Mode: historical' "${output}"
 }
 
@@ -225,4 +232,4 @@ if (( normal_visible <= historical_visible )); then
     exit 1
 fi
 
-echo "Phase 11 profiling, frustum-culling, resource, and browser smoke tests passed."
+echo "Phase 12 fidelity, packaging, profiling, and browser smoke tests passed."
