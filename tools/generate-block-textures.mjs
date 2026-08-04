@@ -13,7 +13,7 @@ import {
     createAtlasPixels,
 } from "../web/atlas.mjs";
 
-export async function generateTexturePreviews(outputDirectory = "generated-texture-previews") {
+export async function generateTexturePreviews(outputDirectory = "build/texture-previews") {
     const directory = resolve(outputDirectory);
     await mkdir(directory, { recursive: true });
 
