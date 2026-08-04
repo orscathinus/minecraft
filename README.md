@@ -10,64 +10,84 @@ This is an independent educational recreation. It is not affiliated with Mojang 
 
 The project supports GitHub Pages from `main` / repository root and through the GitHub Actions deployment of `web/`.
 
-## Current status: Phase 8 BRIGHT / DARK lighting
+## Current status: Phase 9 proximity-ordered chunks
 
-The browser build keeps the finite seeded world, primitive caves, collision-enabled first-person player, and original Phase 7 textures. Chunk geometry now contains one binary sunlight value per visible face:
+The finite world remains exactly `256 × 64 × 256`, divided into a `16 × 16` grid of horizontal chunks. Each chunk is `16 × 64 × 16` blocks.
 
-- `BRIGHT` (`1`): the first opaque block reached when scanning a column downward from Y=63;
-- `DARK` (`0`): every opaque block below that first hit.
+Terrain generation, cave carving, and the compact BRIGHT/DARK sunlight cache are completed deterministically before play begins. Chunk meshing and WebGL upload are no longer performed as one blocking full-world operation. A `ChunkManager` processes unfinished chunks incrementally from the animation frame and always prioritizes the chunks nearest the player's current chunk.
 
-AIR does not stop sunlight. An opaque GRASS or ROCK block stops it for every lower block in that X/Z column. A block at Y=63 is BRIGHT when it is the first opaque block. There are no torches, colored lights, sideways flood fill, smooth lighting, day/night cycles, or dynamic shadows.
+Priority is ordered by:
 
-## Chunk-level sunlight data
+1. squared horizontal chunk distance from the player;
+2. chunk Z coordinate;
+3. chunk X coordinate.
 
-`web/sunlight.mjs` stores one signed byte for each of the world’s 65,536 X/Z columns. The byte records the highest opaque Y coordinate, or `-1` for a completely empty column. This cache is built after terrain and cave generation and before chunk meshing.
+The Z-then-X tie break makes equal-distance processing deterministic.
 
-World edits mark their X/Z column dirty. Before affected chunk meshes are rebuilt, only those dirty sunlight columns are rescanned. Existing chunk-boundary invalidation remains active, so changed boundary blocks rebuild both adjoining chunks.
+## Processing modes
 
-No world-sized raycast occurs in the fragment shader. The mesher resolves each block to BRIGHT or DARK once and writes that binary state into the existing sixth vertex attribute.
+### Normal mode
 
-## Rendering model
+Normal mode is the default. It processes at most two chunks per animation frame. Input, physics, mouse look, and rendering continue between processing batches.
 
-BRIGHT geometry receives full texture color. DARK geometry receives one fixed brightness level of `0.28`, regardless of how far it is from sunlight.
+### Historical-loading mode
 
-Only DARK geometry receives heavy black distance fog:
+Add `?loading=historical` to the URL or press `H` while playing. Historical mode processes one chunk every ten rendered frames, intentionally making the nearest-first loading pattern visible without sleeping or blocking the render loop.
 
-- fog begins at 4 blocks from the camera;
-- it reaches its maximum at 30 blocks;
-- it uses five intentionally crude distance steps;
-- maximum black fog strength is 0.96.
+Example:
 
-BRIGHT outdoor geometry does not receive this aggressive cave fog. The clear-sky color remains exactly `#7FCCFF`.
+```text
+https://orscathinus.github.io/minecraft/?loading=historical
+```
 
-This is deliberately not a modern lighting engine. It has no smooth-light interpolation, ambient occlusion, shadow map, light propagation, emissive blocks, or colored illumination.
+The player's own chunk is meshed and uploaded before the first playable frame in either mode. The remaining chunks then spread outward from the player.
+
+## Reprioritization and refreshes
+
+The player's chunk is recalculated from the player's X/Z position every frame. Crossing a chunk boundary rebuilds the unfinished-work priority queue around the new chunk.
+
+Queue entries carry an epoch and revision. Reprioritization clears stale queue entries, increments the epoch, and recreates only unfinished work. Already visible chunks are not uploaded again merely because the player moved.
+
+When voxel generation or a future block edit changes the world:
+
+1. changed sunlight columns are recalculated;
+2. affected chunks and boundary neighbors are queued as explicit refreshes;
+3. the old GPU mesh for each refreshed chunk is disposed;
+4. the replacement mesh is uploaded on the rendering thread.
+
+A chunk can therefore be uploaded more than once only when a refresh provides a reason.
+
+## Optional chunk overlay
+
+Press `F3`, or open the page with `?debugChunks=1`, to show:
+
+- player chunk;
+- chunks queued;
+- chunks meshed;
+- chunks visible;
+- current draw calls;
+- current processing mode and frame budget.
+
+The overlay is temporary debugging UI and does not affect world generation.
 
 ## What appears on screen
 
-After terrain generation, cave carving, sunlight calculation, and meshing finish, the player appears beside a substantial cave entrance and initially faces it.
+After deterministic terrain, cave, and sunlight preparation, the player appears beside a cave entrance. The player's current chunk is already visible. Nearby chunks then appear before distant chunks.
 
-The rolling outdoor grass surface is fully bright beneath the light-blue sky. Rock and grass covered by another opaque block are immediately and consistently dim. Entering a cave produces a harsh transition from the bright entrance to dark interior geometry. Nearby cave walls remain faintly visible; walls farther down a passage become progressively blacker because of the stepped dark-only fog.
+In normal mode this expansion is quick. In historical mode the user can clearly watch square chunk regions arrive outward from the player. Walking into another chunk immediately reprioritizes unfinished regions around the new position.
 
-A vertical pit can carry sunlight down through AIR until the first solid floor block. Cave rooms under an intact rock roof remain DARK even when they are close to the surface.
-
-The finite `256 × 64 × 256` world, deterministic seeds, player collision, gravity, jumping, caves, and original crisp textures remain active. Add an integer such as `?seed=42` to the URL for a different deterministic terrain-and-cave layout.
-
-## Original texture ownership
-
-The `16 × 16` grass and rock textures were designed from scratch for this repository as deterministic procedural pixel art. They were not copied, sampled, traced, recolored, or derived from Minecraft, Mojang, RubyDung, or another game.
-
-`web/block-textures.mjs` is the authoritative pixel source. The atlas uses replicated one-pixel gutters, `NEAREST` filtering, `CLAMP_TO_EDGE`, and no mipmaps.
+The original `16 × 16` grass and rock textures, exact `#7FCCFF` sky, binary cave lighting, dark-only stepped distance fog, first-person collision, gravity, and jumping remain active.
 
 ## Browser controls
 
 - Click the canvas: capture the mouse.
-- Move the mouse: look left, right, up, and down.
+- Move the mouse: look around.
 - `W` / `S`: move forward / backward.
-- `A` / `D`: strafe left / right.
+- `A` / `D`: strafe.
 - `Space`: jump while grounded.
+- `F3`: toggle the chunk debug overlay.
+- `H`: switch normal and historical loading modes.
 - `Escape`: release the mouse; press again while released to stop and release graphics resources.
-
-There is no flying, sprinting, crouching, swimming, or automatic step-up.
 
 ## Browser development
 
@@ -81,20 +101,23 @@ python3 -m http.server 8000
 
 Open `http://localhost:8000/` or `http://localhost:8000/web/`.
 
-## Phase 8 structure
+## Phase 9 structure
 
-- `web/sunlight.mjs`: compact column sunlight cache, BRIGHT/DARK states, and relighting.
-- `web/world.mjs`: dirty lighting-column and dirty chunk tracking.
-- `web/chunk-mesher.mjs`: binary light-state encoding in visible chunk faces.
-- `web/world-mesh.mjs`: full-world and dirty-chunk sunlight-aware mesh rebuilding.
-- `web/shaders/block.vert.glsl`: passes binary state and camera distance.
-- `web/shaders/block.frag.glsl`: fixed dim cave light and stepped black fog.
-- `web/test/sunlight.test.mjs`: focused sunlight, roof, Y=63, cave-opening, and relighting tests.
-- `web/test/browser-smoke.sh`: real Chromium validation of both GitHub Pages entry layouts.
+- `web/chunk-manager.mjs`: player chunk calculation, priority queue, frame budgets, reprioritization, refreshes, and statistics.
+- `web/renderer.mjs`: independently replaceable GPU meshes keyed by chunk position.
+- `web/app.mjs`: per-frame chunk processing, mode switching, and debug-overlay updates.
+- `web/test/chunk-manager.test.mjs`: ordering, budget, refresh, duplicate-upload, and reprioritization tests.
+- `web/test/browser-smoke.sh`: real Chromium validation of normal and historical modes from both Pages entry layouts.
+
+## Existing lighting and texture systems
+
+Each visible face carries one binary sunlight state. BRIGHT geometry uses full texture color. DARK geometry uses fixed `0.28` brightness and heavy stepped black fog from 4 to 30 blocks. The clear color remains exactly `#7FCCFF`.
+
+The grass and rock textures are original deterministic `16 × 16` procedural pixel art. They were not copied, traced, sampled, recolored, or derived from Minecraft, Mojang, RubyDung, or another game.
 
 ## Desktop reference build
 
-The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 8 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
+The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 9 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
 
 ```bash
 ./gradlew build
@@ -104,4 +127,4 @@ The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phas
 
 ## Scope boundary
 
-Phase 8 does not add torches, colored or flood-filled light, smooth lighting, shadows, ambient occlusion, day/night cycles, water, lava, additional blocks, block interaction, inventory, enemies, sound, or world saving.
+Phase 9 does not add infinite terrain, chunk unloading, multithreaded generation, frustum culling, torches, smooth lighting, block interaction, inventory, enemies, sound, or persistence.
