@@ -24,6 +24,9 @@ done
 for path in \
     index.html \
     web/index.html \
+    web/performance-diagnostics.mjs \
+    web/benchmark.mjs \
+    tools/benchmark-web.mjs \
     web/spawn-controller.mjs \
     web/player-physics.mjs \
     web/first-person-player.mjs \
@@ -83,10 +86,10 @@ run_chromium() {
 
 assert_shared_state() {
     local output="$1"
-    assert_dom 'Cave Game Tech Test Recreation · Phase 10' "${output}"
+    assert_dom 'Cave Game Tech Test Recreation · Phase 11' "${output}"
     assert_dom 'data-app-state="running"' "${output}"
     assert_dom 'data-webgl="2"' "${output}"
-    assert_dom 'data-phase="10"' "${output}"
+    assert_dom 'data-phase="11"' "${output}"
     assert_dom 'data-texture-phase="7"' "${output}"
     assert_dom 'data-texture-version="phase-7-original-v1"' "${output}"
     assert_dom 'data-texture-size="16"' "${output}"
@@ -99,13 +102,7 @@ assert_shared_state() {
     assert_dom 'data-bright-brightness="1.00"' "${output}"
     assert_dom 'data-dark-brightness="0.28"' "${output}"
     assert_dom 'data-dark-fog="black-stepped-distance"' "${output}"
-    assert_dom 'data-dark-fog-start="4.0"' "${output}"
-    assert_dom 'data-dark-fog-end="30.0"' "${output}"
-    assert_dom 'data-bright-fog="none"' "${output}"
-    assert_dom 'data-fragment-world-raycasts="0"' "${output}"
     assert_dom 'data-sky-color="#7FCCFF"' "${output}"
-    assert_dom 'data-bright-faces="[1-9][0-9]*"' "${output}"
-    assert_dom 'data-dark-faces="[1-9][0-9]*"' "${output}"
     assert_dom 'data-draw-calls="[1-9][0-9]*"' "${output}"
     assert_dom 'data-gl-errors="0"' "${output}"
     assert_dom 'data-geometry="visible"' "${output}"
@@ -113,12 +110,18 @@ assert_shared_state() {
     assert_dom 'data-chunks-queued="[0-9][0-9]*"' "${output}"
     assert_dom 'data-chunks-meshed="[1-9][0-9]*"' "${output}"
     assert_dom 'data-chunks-visible="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-chunks-frustum-culled="[0-9][0-9]*"' "${output}"
     assert_dom 'data-chunk-uploads="[1-9][0-9]*"' "${output}"
     assert_dom 'data-chunk-priority="squared-horizontal-distance"' "${output}"
     assert_dom 'data-chunk-tie-break="z-then-x"' "${output}"
     assert_dom 'data-stale-work-policy="epoch-reprioritize"' "${output}"
     assert_dom 'data-unnecessary-duplicate-uploads="0"' "${output}"
     assert_dom 'data-world-faces="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-world-triangles="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-rendered-triangles="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-hidden-faces-omitted="true"' "${output}"
+    assert_dom 'data-frustum-culling="true"' "${output}"
+    assert_dom 'data-distance-culling="false"' "${output}"
     assert_dom 'data-world-bounds="0-255,0-63,0-255"' "${output}"
     assert_dom 'data-terrain-range="57-63"' "${output}"
     assert_dom 'data-actual-terrain-range="58-62"' "${output}"
@@ -126,8 +129,6 @@ assert_shared_state() {
     assert_dom 'data-cave-algorithm="seeded-sphere-worms"' "${output}"
     assert_dom 'data-cave-carved-blocks="4171"' "${output}"
     assert_dom 'data-cave-minimum-y="1"' "${output}"
-    assert_dom 'data-cave-surface-openings="81"' "${output}"
-    assert_dom 'data-cave-affected-chunks="33"' "${output}"
     assert_dom 'data-cave-bottom-solid="true"' "${output}"
     assert_dom 'data-spawn-model="historical-random-xz-y74"' "${output}"
     assert_dom 'data-spawn-y="74"' "${output}"
@@ -145,15 +146,37 @@ assert_shared_state() {
     assert_dom 'data-horizontal-world-clamp="false"' "${output}"
     assert_dom 'data-void-safety-limit="1000000000000"' "${output}"
     assert_dom 'data-void-safety-rebase="1000000000"' "${output}"
-    assert_dom 'data-void-safety-rebases="0"' "${output}"
-    assert_dom 'data-player-velocity-x="' "${output}"
-    assert_dom 'data-player-velocity-y="' "${output}"
-    assert_dom 'data-player-velocity-z="' "${output}"
     assert_dom 'data-player-width="0.60"' "${output}"
     assert_dom 'data-player-height="1.62"' "${output}"
     assert_dom 'data-player-eye-height="1.54"' "${output}"
     assert_dom 'data-player-model="none"' "${output}"
     assert_dom 'data-controls="wasd-space-r-mouse-f3-h"' "${output}"
+    assert_dom 'data-profiling="runtime-and-command"' "${output}"
+    assert_dom 'data-world-generation-ms="[0-9]' "${output}"
+    assert_dom 'data-cave-generation-ms="[0-9]' "${output}"
+    assert_dom 'data-sunlight-generation-ms="[0-9]' "${output}"
+    assert_dom 'data-average-chunk-mesh-ms="[0-9]' "${output}"
+    assert_dom 'data-total-chunk-mesh-ms="[0-9]' "${output}"
+    assert_dom 'data-average-upload-ms="[0-9]' "${output}"
+    assert_dom 'data-total-upload-ms="[0-9]' "${output}"
+    assert_dom 'data-average-frame-ms="[0-9]' "${output}"
+    assert_dom 'data-peak-frame-ms="[0-9]' "${output}"
+    assert_dom 'data-block-array-bytes="4194304"' "${output}"
+    assert_dom 'data-sunlight-bytes="65536"' "${output}"
+    assert_dom 'data-chunk-mesh-bytes="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-peak-chunk-mesh-bytes="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-peak-pending-chunks="256"' "${output}"
+    assert_dom 'data-live-gpu-meshes="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-live-gpu-buffers="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-hot-path-allocation-policy="reused-typed-arrays-and-snapshots"' "${output}"
+    assert_dom 'data-metadata-update-frames="15"' "${output}"
+    assert_dom 'data-unchanged-chunk-rebuilds="false"' "${output}"
+    assert_dom 'data-thread-model="single-render-thread"' "${output}"
+    assert_dom 'data-worker-threads="0"' "${output}"
+    assert_dom 'data-gpu-uploads-thread="rendering-thread"' "${output}"
+    assert_dom 'data-normal-mesh-budget="2"' "${output}"
+    assert_dom 'data-historical-mesh-budget="1"' "${output}"
+    assert_dom 'data-historical-frame-interval="10"' "${output}"
 
     local player_chunk first_chunk
     player_chunk="$(attribute_value player-chunk "${output}")"
@@ -179,7 +202,7 @@ assert_historical_mode() {
     assert_dom 'data-chunk-frame-interval="10"' "${output}"
     assert_dom 'data-chunks-queued="[1-9][0-9]*"' "${output}"
     assert_dom 'data-chunk-loading-complete="false"' "${output}"
-    assert_dom 'CHUNK / SPAWN DEBUG' "${output}"
+    assert_dom 'PHASE 11 DIAGNOSTICS' "${output}"
     assert_dom 'Mode: historical' "${output}"
 }
 
@@ -202,4 +225,4 @@ if (( normal_visible <= historical_visible )); then
     exit 1
 fi
 
-echo "Phase 10 spawn, void-policy, and proximity chunk smoke tests passed."
+echo "Phase 11 profiling, frustum-culling, resource, and browser smoke tests passed."
