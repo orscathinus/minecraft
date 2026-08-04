@@ -14,6 +14,14 @@ export class FirstPersonPlayer {
     #listeners = [];
     #mouseSensitivity;
     #respawnedLastUpdate = false;
+    #input = {
+        forward: false,
+        backward: false,
+        left: false,
+        right: false,
+        jumpPressed: false,
+    };
+    #spawnState = {};
 
     constructor(canvas, world, {
         position,
@@ -22,11 +30,9 @@ export class FirstPersonPlayer {
         mouseSensitivity = 0.0024,
         spawnController = new HistoricalSpawnController(),
     } = {}) {
-        if (!(canvas instanceof HTMLCanvasElement)) {
-            throw new TypeError("FirstPersonPlayer requires a canvas");
-        }
-        if (!spawnController || typeof spawnController.updateHeld !== "function"
-            || typeof spawnController.snapshot !== "function") {
+        if (!(canvas instanceof HTMLCanvasElement)) throw new TypeError("FirstPersonPlayer requires a canvas");
+        if (!spawnController || typeof spawnController.updateHeldFast !== "function"
+            || typeof spawnController.writeSnapshot !== "function") {
             throw new TypeError("FirstPersonPlayer requires a historical spawn controller");
         }
         this.#canvas = canvas;
@@ -36,7 +42,7 @@ export class FirstPersonPlayer {
         this.#installListeners();
     }
 
-    update(stepSeconds) {
+    advance(stepSeconds) {
         this.#respawnedLastUpdate = false;
         if (this.#mouseDeltaX !== 0 || this.#mouseDeltaY !== 0) {
             this.#body.rotate(
@@ -47,40 +53,55 @@ export class FirstPersonPlayer {
             this.#mouseDeltaY = 0;
         }
 
-        const respawn = this.#spawnController.updateHeld(this.#body, this.#keys.has("KeyR"));
-        if (respawn !== null) {
+        if (this.#spawnController.updateHeldFast(this.#body, this.#keys.has("KeyR"))) {
             this.#jumpQueued = false;
             this.#respawnedLastUpdate = true;
-            return this.snapshot();
+            return;
         }
 
-        this.#body.update(stepSeconds, {
-            forward: this.#keys.has("KeyW"),
-            backward: this.#keys.has("KeyS"),
-            left: this.#keys.has("KeyA"),
-            right: this.#keys.has("KeyD"),
-            jumpPressed: this.#consumeJump(),
-        });
+        this.#input.forward = this.#keys.has("KeyW");
+        this.#input.backward = this.#keys.has("KeyS");
+        this.#input.left = this.#keys.has("KeyA");
+        this.#input.right = this.#keys.has("KeyD");
+        this.#input.jumpPressed = this.#consumeJump();
+        this.#body.advance(stepSeconds, this.#input);
+    }
+
+    update(stepSeconds) {
+        this.advance(stepSeconds);
         return this.snapshot();
     }
 
     viewMatrix() { return this.#body.viewMatrix(); }
 
+    writeSnapshot(target) {
+        this.#body.writeSnapshot(target);
+        this.#spawnController.writeSnapshot(this.#spawnState);
+        target.rHeld = this.#keys.has("KeyR");
+        target.respawnedLastUpdate = this.#respawnedLastUpdate;
+        target.respawnCount = this.#spawnState.respawnCount;
+        target.totalSpawns = this.#spawnState.totalSpawns;
+        target.lastSpawnX = this.#spawnState.lastX;
+        target.lastSpawnY = this.#spawnState.lastY;
+        target.lastSpawnZ = this.#spawnState.lastZ;
+        return target;
+    }
+
     snapshot() {
-        const body = this.#body.snapshot();
-        const spawning = this.#spawnController.snapshot();
-        return Object.freeze({
-            ...body,
-            rHeld: this.#keys.has("KeyR"),
-            respawnedLastUpdate: this.#respawnedLastUpdate,
-            respawnCount: spawning.respawnCount,
-            totalSpawns: spawning.totalSpawns,
-            lastSpawn: spawning.lastSpawn,
-        });
+        const state = this.writeSnapshot({});
+        state.position = Object.freeze([state.x, state.y, state.z]);
+        state.velocity = Object.freeze([state.velocityX, state.velocityY, state.velocityZ]);
+        state.lastSpawn = this.#spawnState.hasSpawn
+            ? Object.freeze({ position: Object.freeze([state.lastSpawnX, state.lastSpawnY, state.lastSpawnZ]) })
+            : null;
+        return Object.freeze(state);
     }
 
     get grounded() { return this.#body.grounded; }
     get position() { return this.#body.position; }
+    get x() { return this.#body.x; }
+    get y() { return this.#body.y; }
+    get z() { return this.#body.z; }
 
     resetInput() {
         this.#keys.clear();
@@ -94,7 +115,7 @@ export class FirstPersonPlayer {
         for (const [target, type, listener, options] of this.#listeners) {
             target.removeEventListener(type, listener, options);
         }
-        this.#listeners = [];
+        this.#listeners.length = 0;
         this.resetInput();
     }
 
