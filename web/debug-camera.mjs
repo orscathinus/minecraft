@@ -37,8 +37,9 @@ export class DebugCamera {
         if (this.#keys.has("KeyQ")) movement[1] -= 1;
         const length = Math.hypot(...movement);
         if (length > 0) {
-            this.#position = addVectors(movement, [0,0,0]).map((component, index) =>
-                this.#position[index] + component * speed * stepSeconds / length
+            this.#position = addVectors(
+                this.#position,
+                scaleVector(movement, speed * stepSeconds / length),
             );
         }
     }
