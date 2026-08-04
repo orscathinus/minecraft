@@ -1,10 +1,15 @@
 export function perspectiveMatrix(fieldOfViewRadians, aspect, near, far) {
+    return perspectiveMatrixInto(new Float32Array(16), fieldOfViewRadians, aspect, near, far);
+}
+
+export function perspectiveMatrixInto(result, fieldOfViewRadians, aspect, near, far) {
+    if (!(result instanceof Float32Array) || result.length !== 16) throw new TypeError("Perspective result must be Float32Array(16)");
     if (![fieldOfViewRadians, aspect, near, far].every(Number.isFinite)) throw new TypeError("Perspective values must be finite");
     if (fieldOfViewRadians <= 0 || fieldOfViewRadians >= Math.PI) throw new RangeError("fieldOfViewRadians must be between 0 and PI");
     if (aspect <= 0 || near <= 0 || far <= near) throw new RangeError("Invalid perspective clipping values");
+    result.fill(0);
     const f = 1 / Math.tan(fieldOfViewRadians / 2);
     const inverseDepth = 1 / (near - far);
-    const result = new Float32Array(16);
     result[0] = f / aspect;
     result[5] = f;
     result[10] = (far + near) * inverseDepth;
