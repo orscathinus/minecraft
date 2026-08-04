@@ -7,6 +7,7 @@ import { isFiniteChunkCoordinate, isFiniteWorldCoordinate } from "./world-config
 export class World {
     #chunks = new Map();
     #dirtyChunks = new Map();
+    #dirtyLightingColumns = new Map();
 
     addChunk(chunk) {
         if (!(chunk instanceof Chunk)) throw new TypeError("World.addChunk requires a Chunk");
@@ -45,6 +46,7 @@ export class World {
         if (chunk.getBlock(local.x, y, local.z) === blockType) return false;
         chunk.setBlock(local.x, y, local.z, blockType);
         this.#markBlockAndBoundaryNeighborsDirty(globalX, globalZ);
+        this.markLightingColumnDirty(globalX, globalZ);
         return true;
     }
 
@@ -69,6 +71,28 @@ export class World {
 
     clearDirtyChunks() {
         this.#dirtyChunks.clear();
+    }
+
+    markLightingColumnDirty(globalX, globalZ) {
+        if (!Number.isInteger(globalX) || !Number.isInteger(globalZ)
+            || !isFiniteWorldCoordinate(globalX, 0, globalZ)) return false;
+        const key = `${globalX},${globalZ}`;
+        this.#dirtyLightingColumns.set(key, Object.freeze({ x: globalX, z: globalZ }));
+        return true;
+    }
+
+    dirtyLightingColumns() {
+        return Object.freeze([...this.#dirtyLightingColumns.values()]);
+    }
+
+    consumeDirtyLightingColumns() {
+        const columns = this.dirtyLightingColumns();
+        this.#dirtyLightingColumns.clear();
+        return columns;
+    }
+
+    clearDirtyLightingColumns() {
+        this.#dirtyLightingColumns.clear();
     }
 
     #markBlockAndBoundaryNeighborsDirty(globalX, globalZ) {

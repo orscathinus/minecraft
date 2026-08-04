@@ -5,6 +5,7 @@ import { FixedStepTimer } from "./fixed-step-timer.mjs";
 import { perspectiveMatrix } from "./math.mjs";
 import { PlayerConfig } from "./player-physics.mjs";
 import { VoxelRenderer } from "./renderer.mjs";
+import { LightingConfig, SunlightModel } from "./sunlight.mjs";
 import { SeededTerrainGenerator } from "./terrain-generator.mjs";
 import { WorldConfig } from "./world-config.mjs";
 import { buildFiniteWorldMesh } from "./world-mesh.mjs";
@@ -77,11 +78,24 @@ class BrowserGame {
         console.info("Surface openings:", caveResult.surfaceOpenings);
         console.info("Chunks marked for remeshing:", caveResult.affectedChunks.length);
 
-        status.textContent = "Building cave-aware chunk meshes · 0%";
-        const worldMesh = await buildFiniteWorldMesh(world, {
+        status.textContent = "Calculating BRIGHT / DARK sunlight · 0%";
+        const sunlight = new SunlightModel(world);
+        await sunlight.rebuildAll({
             onProgress(completed, total) {
                 const percent = Math.round(completed / total * 100);
-                status.textContent = `Building cave-aware chunk meshes · ${percent}%`;
+                status.textContent = `Calculating BRIGHT / DARK sunlight · ${percent}%`;
+                if (completed % 32 === 0 || completed === total) {
+                    console.info(`Sunlight columns: ${completed}/${total} rows (${percent}%).`);
+                }
+            },
+        });
+
+        status.textContent = "Building binary-lit chunk meshes · 0%";
+        const worldMesh = await buildFiniteWorldMesh(world, {
+            sunlight,
+            onProgress(completed, total) {
+                const percent = Math.round(completed / total * 100);
+                status.textContent = `Building binary-lit chunk meshes · ${percent}%`;
                 if (completed % 16 === 0 || completed === total) {
                     console.info(`World meshing: ${completed}/${total} chunks (${percent}%).`);
                 }
@@ -139,10 +153,12 @@ class BrowserGame {
     }
 
     start() {
-        console.info("Starting Cave Game Phase 6 cave renderer.");
+        console.info("Starting Cave Game Phase 8 binary-lighting renderer.");
         console.info("WebGL version:", this.#gl.getParameter(this.#gl.VERSION));
         console.info("World chunks:", this.#worldMesh.chunkCount);
         console.info("Visible world faces:", this.#worldMesh.faceCount);
+        console.info("BRIGHT faces:", this.#worldMesh.brightFaceCount);
+        console.info("DARK faces:", this.#worldMesh.darkFaceCount);
         console.info("Player dimensions:", PlayerConfig.width, "×", PlayerConfig.height);
         this.#gl.clearColor(SKY_RED, SKY_GREEN, SKY_BLUE, 1);
         this.#installListeners();
@@ -213,12 +229,14 @@ class BrowserGame {
         Object.assign(document.documentElement.dataset, {
             appState: "running",
             webgl: "2",
-            phase: "6",
+            phase: "8",
             drawCalls: String(this.#renderer.drawCalls),
             glErrors: "0",
             geometry: "visible",
             chunkCount: String(this.#worldMesh.chunkCount),
             worldFaces: String(this.#worldMesh.faceCount),
+            brightFaces: String(this.#worldMesh.brightFaceCount),
+            darkFaces: String(this.#worldMesh.darkFaceCount),
             worldBounds: "0-255,0-63,0-255",
             terrainRange: `${WorldConfig.surfaceMinY}-${WorldConfig.surfaceMaxY}`,
             actualTerrainRange: `${this.#terrainRange.min}-${this.#terrainRange.max}`,
@@ -230,6 +248,16 @@ class BrowserGame {
             caveAffectedChunks: String(this.#caveResult.affectedChunks.length),
             caveBottomSolid: "true",
             caveEntrance: `${this.#entrance.x},${this.#entrance.y},${this.#entrance.z}`,
+            lightingModel: "binary-column-sunlight",
+            lightingStates: "2",
+            brightBrightness: LightingConfig.brightBrightness.toFixed(2),
+            darkBrightness: LightingConfig.darkBrightness.toFixed(2),
+            darkFog: "black-stepped-distance",
+            darkFogStart: LightingConfig.darkFogStart.toFixed(1),
+            darkFogEnd: LightingConfig.darkFogEnd.toFixed(1),
+            brightFog: "none",
+            fragmentWorldRaycasts: "0",
+            skyColor: "#7FCCFF",
             playerWidth: PlayerConfig.width.toFixed(2),
             playerHeight: PlayerConfig.height.toFixed(2),
             playerEyeHeight: PlayerConfig.eyeHeight.toFixed(2),
@@ -368,7 +396,7 @@ function verifyGeometryWasDrawn(gl, canvas) {
     for (let index = 0; index < pixels.length; index += 4) {
         if (pixels[index] !== 127 || pixels[index + 1] !== 204 || pixels[index + 2] !== 255) return;
     }
-    throw new Error("The cave world mesh did not produce any visible pixels");
+    throw new Error("The lit cave world mesh did not produce any visible pixels");
 }
 
 function showStartupFailure(status, failure) {
