@@ -1,3 +1,5 @@
+import { BlockType, isOpaqueBlock } from "./block-type.mjs";
+import { CaveGenerator } from "./cave-generator.mjs";
 import { FirstPersonPlayer } from "./first-person-player.mjs";
 import { FixedStepTimer } from "./fixed-step-timer.mjs";
 import { perspectiveMatrix } from "./math.mjs";
@@ -22,6 +24,8 @@ class BrowserGame {
     #worldMesh;
     #seed;
     #terrainRange;
+    #caveResult;
+    #entrance;
     #timer = new FixedStepTimer({
         updatesPerSecond: 60,
         maxFrameDeltaSeconds: 0.25,
@@ -60,22 +64,36 @@ class BrowserGame {
             },
         });
 
-        status.textContent = "Building visible chunk meshes · 0%";
+        status.textContent = "Carving primitive caves · 0%";
+        const caveResult = await new CaveGenerator(seed).carveWorld(world, {
+            onProgress(completed, total) {
+                const percent = Math.round(completed / total * 100);
+                status.textContent = `Carving primitive caves · ${percent}%`;
+                console.info(`Cave generation: ${completed}/${total} passes (${percent}%).`);
+            },
+        });
+        console.info("Cave blocks carved:", caveResult.carvedBlocks);
+        console.info("Deepest cave Y:", caveResult.minimumCarvedY);
+        console.info("Surface openings:", caveResult.surfaceOpenings);
+        console.info("Chunks marked for remeshing:", caveResult.affectedChunks.length);
+
+        status.textContent = "Building cave-aware chunk meshes · 0%";
         const worldMesh = await buildFiniteWorldMesh(world, {
             onProgress(completed, total) {
                 const percent = Math.round(completed / total * 100);
-                status.textContent = `Building visible chunk meshes · ${percent}%`;
+                status.textContent = `Building cave-aware chunk meshes · ${percent}%`;
                 if (completed % 16 === 0 || completed === total) {
                     console.info(`World meshing: ${completed}/${total} chunks (${percent}%).`);
                 }
             },
         });
 
-        status.textContent = "Spawning first-person player…";
+        status.textContent = "Spawning first-person player near a cave entrance…";
         const renderer = await VoxelRenderer.create(gl);
         renderer.setMesh(worldMesh);
         const terrainRange = measureTerrainRange(generator);
-        const spawnPosition = findSpawnPosition(generator);
+        const entrance = findNearestSurfaceEntrance(world, generator);
+        const spawn = findSpawnNearEntrance(world, entrance);
         return new BrowserGame(
             canvas,
             status,
@@ -85,11 +103,25 @@ class BrowserGame {
             worldMesh,
             seed,
             terrainRange,
-            spawnPosition,
+            caveResult,
+            entrance,
+            spawn,
         );
     }
 
-    constructor(canvas, status, gl, renderer, world, worldMesh, seed, terrainRange, spawnPosition) {
+    constructor(
+        canvas,
+        status,
+        gl,
+        renderer,
+        world,
+        worldMesh,
+        seed,
+        terrainRange,
+        caveResult,
+        entrance,
+        spawn,
+    ) {
         this.#canvas = canvas;
         this.#status = status;
         this.#gl = gl;
@@ -97,15 +129,17 @@ class BrowserGame {
         this.#worldMesh = worldMesh;
         this.#seed = seed;
         this.#terrainRange = terrainRange;
+        this.#caveResult = caveResult;
+        this.#entrance = entrance;
         this.#player = new FirstPersonPlayer(canvas, world, {
-            position: spawnPosition,
-            yaw: 0,
-            pitch: -0.16,
+            position: spawn.position,
+            yaw: spawn.yaw,
+            pitch: -0.20,
         });
     }
 
     start() {
-        console.info("Starting Cave Game Phase 5 first-person player.");
+        console.info("Starting Cave Game Phase 6 cave renderer.");
         console.info("WebGL version:", this.#gl.getParameter(this.#gl.VERSION));
         console.info("World chunks:", this.#worldMesh.chunkCount);
         console.info("Visible world faces:", this.#worldMesh.faceCount);
@@ -179,7 +213,7 @@ class BrowserGame {
         Object.assign(document.documentElement.dataset, {
             appState: "running",
             webgl: "2",
-            phase: "5",
+            phase: "6",
             drawCalls: String(this.#renderer.drawCalls),
             glErrors: "0",
             geometry: "visible",
@@ -189,6 +223,13 @@ class BrowserGame {
             terrainRange: `${WorldConfig.surfaceMinY}-${WorldConfig.surfaceMaxY}`,
             actualTerrainRange: `${this.#terrainRange.min}-${this.#terrainRange.max}`,
             seed: String(this.#seed),
+            caveAlgorithm: "seeded-sphere-worms",
+            caveCarvedBlocks: String(this.#caveResult.carvedBlocks),
+            caveMinimumY: String(this.#caveResult.minimumCarvedY),
+            caveSurfaceOpenings: String(this.#caveResult.surfaceOpenings),
+            caveAffectedChunks: String(this.#caveResult.affectedChunks.length),
+            caveBottomSolid: "true",
+            caveEntrance: `${this.#entrance.x},${this.#entrance.y},${this.#entrance.z}`,
             playerWidth: PlayerConfig.width.toFixed(2),
             playerHeight: PlayerConfig.height.toFixed(2),
             playerEyeHeight: PlayerConfig.eyeHeight.toFixed(2),
@@ -246,10 +287,56 @@ function readSeed() {
     return Number.isSafeInteger(parsed) ? parsed : WorldConfig.defaultSeed;
 }
 
-function findSpawnPosition(generator) {
-    const x = Math.floor(WorldConfig.sizeX / 2);
-    const z = Math.floor(WorldConfig.sizeZ / 2);
-    return Object.freeze([x + 0.5, generator.terrainHeight(x, z) + 1, z + 0.5]);
+function findNearestSurfaceEntrance(world, generator) {
+    const centerX = Math.floor(WorldConfig.sizeX / 2);
+    const centerZ = Math.floor(WorldConfig.sizeZ / 2);
+    let best = null;
+    let bestDistanceSquared = Number.POSITIVE_INFINITY;
+    for (let z = WorldConfig.minZ; z <= WorldConfig.maxZ; z += 1) {
+        for (let x = WorldConfig.minX; x <= WorldConfig.maxX; x += 1) {
+            const originalSurfaceY = generator.terrainHeight(x, z);
+            if (world.getBlock(x, originalSurfaceY, z) !== BlockType.AIR) continue;
+            let airDepth = 0;
+            for (let y = originalSurfaceY; y >= Math.max(1, originalSurfaceY - 5); y -= 1) {
+                if (world.getBlock(x, y, z) === BlockType.AIR) airDepth += 1;
+            }
+            if (airDepth < 3) continue;
+            const distanceSquared = (x - centerX) ** 2 + (z - centerZ) ** 2;
+            if (distanceSquared < bestDistanceSquared) {
+                bestDistanceSquared = distanceSquared;
+                best = Object.freeze({ x, y: originalSurfaceY, z });
+            }
+        }
+    }
+    return best ?? Object.freeze({ x: centerX, y: generator.terrainHeight(centerX, centerZ), z: centerZ });
+}
+
+function findSpawnNearEntrance(world, entrance) {
+    for (let radius = 5; radius <= 14; radius += 1) {
+        for (let index = 0; index < 24; index += 1) {
+            const angle = index / 24 * Math.PI * 2;
+            const x = Math.round(entrance.x + Math.cos(angle) * radius);
+            const z = Math.round(entrance.z + Math.sin(angle) * radius);
+            if (x < 1 || x >= WorldConfig.maxX || z < 1 || z >= WorldConfig.maxZ) continue;
+            const groundY = highestSolidY(world, x, z);
+            if (groundY < WorldConfig.surfaceMinY) continue;
+            if (!isOpaqueBlock(world.getBlock(x, groundY, z))) continue;
+            if (world.getBlock(x, groundY + 1, z) !== BlockType.AIR) continue;
+            if (world.getBlock(x, groundY + 2, z) !== BlockType.AIR) continue;
+            const position = Object.freeze([x + 0.5, groundY + 1, z + 0.5]);
+            const deltaX = entrance.x + 0.5 - position[0];
+            const deltaZ = entrance.z + 0.5 - position[2];
+            return Object.freeze({ position, yaw: Math.atan2(deltaX, -deltaZ) });
+        }
+    }
+    throw new Error("Unable to find a safe player spawn near the cave entrance");
+}
+
+function highestSolidY(world, x, z) {
+    for (let y = WorldConfig.maxY; y >= WorldConfig.minY; y -= 1) {
+        if (isOpaqueBlock(world.getBlock(x, y, z))) return y;
+    }
+    return -1;
 }
 
 function measureTerrainRange(generator) {
@@ -281,7 +368,7 @@ function verifyGeometryWasDrawn(gl, canvas) {
     for (let index = 0; index < pixels.length; index += 4) {
         if (pixels[index] !== 127 || pixels[index + 1] !== 204 || pixels[index + 2] !== 255) return;
     }
-    throw new Error("The finite world mesh did not produce any visible pixels");
+    throw new Error("The cave world mesh did not produce any visible pixels");
 }
 
 function showStartupFailure(status, failure) {
