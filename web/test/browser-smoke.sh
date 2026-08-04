@@ -26,6 +26,7 @@ for path in \
     web/atlas.mjs \
     web/pixel-texture-sampling.mjs \
     web/texture-runtime-metadata.mjs \
+    web/sunlight.mjs \
     web/shaders/block.vert.glsl \
     web/shaders/block.frag.glsl; do
     curl --fail --silent "${BASE_URL}/${path}" >/dev/null
@@ -65,10 +66,10 @@ run_browser_check() {
         --dump-dom \
         "${url}" >"${output}"
 
-    assert_dom 'Cave Game Tech Test Recreation · Phase 7' "${output}"
+    assert_dom 'Cave Game Tech Test Recreation · Phase 8' "${output}"
     assert_dom 'data-app-state="running"' "${output}"
     assert_dom 'data-webgl="2"' "${output}"
-    assert_dom 'data-phase="6"' "${output}"
+    assert_dom 'data-phase="8"' "${output}"
     assert_dom 'data-texture-phase="7"' "${output}"
     assert_dom 'data-texture-version="phase-7-original-v1"' "${output}"
     assert_dom 'data-texture-size="16"' "${output}"
@@ -76,6 +77,18 @@ run_browser_check() {
     assert_dom 'data-atlas-gutter="1"' "${output}"
     assert_dom 'data-texture-filtering="nearest"' "${output}"
     assert_dom 'data-texture-mipmaps="false"' "${output}"
+    assert_dom 'data-lighting-model="binary-column-sunlight"' "${output}"
+    assert_dom 'data-lighting-states="2"' "${output}"
+    assert_dom 'data-bright-brightness="1.00"' "${output}"
+    assert_dom 'data-dark-brightness="0.28"' "${output}"
+    assert_dom 'data-dark-fog="black-stepped-distance"' "${output}"
+    assert_dom 'data-dark-fog-start="4.0"' "${output}"
+    assert_dom 'data-dark-fog-end="30.0"' "${output}"
+    assert_dom 'data-bright-fog="none"' "${output}"
+    assert_dom 'data-fragment-world-raycasts="0"' "${output}"
+    assert_dom 'data-sky-color="#7FCCFF"' "${output}"
+    assert_dom 'data-bright-faces="[1-9][0-9]*"' "${output}"
+    assert_dom 'data-dark-faces="[1-9][0-9]*"' "${output}"
     assert_dom 'data-draw-calls="1"' "${output}"
     assert_dom 'data-gl-errors="0"' "${output}"
     assert_dom 'data-geometry="visible"' "${output}"
@@ -102,4 +115,4 @@ run_browser_check() {
 
 run_browser_check "${BASE_URL}/" "${ROOT_DOM_OUTPUT}"
 run_browser_check "${BASE_URL}/web/" "${WEB_DOM_OUTPUT}"
-echo "Root and web-directory Phase 7 original-texture smoke tests passed."
+echo "Root and web-directory Phase 8 binary-lighting smoke tests passed."
