@@ -1,4 +1,4 @@
-import { BlockType, isOpaqueBlock } from "./block-type.mjs";
+import { BlockType } from "./block-type.mjs";
 import {
     ChunkManager,
     ChunkProcessingMode,
@@ -7,9 +7,14 @@ import { CaveGenerator } from "./cave-generator.mjs";
 import { FirstPersonPlayer } from "./first-person-player.mjs";
 import { FixedStepTimer } from "./fixed-step-timer.mjs";
 import { perspectiveMatrix } from "./math.mjs";
-import { PlayerConfig } from "./player-physics.mjs";
+import { PlayerConfig, VoidSafetyConfig } from "./player-physics.mjs";
 import { VoxelRenderer } from "./renderer.mjs";
 import { LightingConfig, SunlightModel } from "./sunlight.mjs";
+import {
+    HistoricalSpawnController,
+    readSpawnDebugSeed,
+    SpawnConfig,
+} from "./spawn-controller.mjs";
 import { SeededTerrainGenerator } from "./terrain-generator.mjs";
 import { WorldConfig } from "./world-config.mjs";
 
@@ -26,6 +31,8 @@ class BrowserGame {
     #renderer;
     #player;
     #chunkManager;
+    #spawnController;
+    #initialSpawn;
     #gl;
     #seed;
     #terrainRange;
@@ -56,7 +63,8 @@ class BrowserGame {
             throw new Error("WebGL 2 is unavailable. Use a current browser with hardware acceleration enabled.");
         }
 
-        const seed = readSeed();
+        const searchParams = new URLSearchParams(window.location.search);
+        const seed = readSeed(searchParams);
         const generator = new SeededTerrainGenerator(seed);
         console.info(`Generating finite world with seed ${seed}.`);
         status.textContent = `Generating finite world · seed ${seed} · 0%`;
@@ -78,10 +86,6 @@ class BrowserGame {
                 console.info(`Cave generation: ${completed}/${total} passes (${percent}%).`);
             },
         });
-        console.info("Cave blocks carved:", caveResult.carvedBlocks);
-        console.info("Deepest cave Y:", caveResult.minimumCarvedY);
-        console.info("Surface openings:", caveResult.surfaceOpenings);
-        console.info("Chunks marked for remeshing:", caveResult.affectedChunks.length);
 
         status.textContent = "Calculating BRIGHT / DARK sunlight · 0%";
         const sunlight = new SunlightModel(world);
@@ -95,13 +99,16 @@ class BrowserGame {
             },
         });
 
-        status.textContent = "Preparing the nearest player chunk…";
+        status.textContent = "Choosing historical random spawn at Y=74…";
         world.clearDirtyChunks();
         world.clearDirtyLightingColumns?.();
         const renderer = await VoxelRenderer.create(gl);
         const terrainRange = measureTerrainRange(generator);
         const entrance = findNearestSurfaceEntrance(world, generator);
-        const spawn = findSpawnNearEntrance(world, entrance);
+        const spawnController = new HistoricalSpawnController({
+            debugSeed: readSpawnDebugSeed(searchParams),
+        });
+        const initialSpawn = spawnController.createInitialSpawn();
         const game = new BrowserGame(
             canvas,
             status,
@@ -114,9 +121,10 @@ class BrowserGame {
             terrainRange,
             caveResult,
             entrance,
-            spawn,
-            readLoadingMode(),
-            readDebugEnabled(),
+            spawnController,
+            initialSpawn,
+            readLoadingMode(searchParams),
+            readDebugEnabled(searchParams),
         );
         game.#chunkManager.processFrame({ maxChunks: 1, ignoreInterval: true });
         return game;
@@ -134,7 +142,8 @@ class BrowserGame {
         terrainRange,
         caveResult,
         entrance,
-        spawn,
+        spawnController,
+        initialSpawn,
         loadingMode,
         debugVisible,
     ) {
@@ -147,25 +156,29 @@ class BrowserGame {
         this.#terrainRange = terrainRange;
         this.#caveResult = caveResult;
         this.#entrance = entrance;
+        this.#spawnController = spawnController;
+        this.#initialSpawn = initialSpawn;
         this.#debugVisible = debugVisible;
         this.#player = new FirstPersonPlayer(canvas, world, {
-            position: spawn.position,
-            yaw: spawn.yaw,
-            pitch: -0.20,
+            position: initialSpawn.position,
+            yaw: yawTowardWorldCenter(initialSpawn.position),
+            pitch: -0.55,
+            spawnController,
         });
         this.#chunkManager = new ChunkManager(world, sunlight, renderer, {
-            playerPosition: spawn.position,
+            playerPosition: initialSpawn.position,
             mode: loadingMode,
         });
     }
 
     start() {
         const chunkState = this.#chunkManager.snapshot();
-        console.info("Starting Cave Game Phase 9 proximity chunk renderer.");
+        const spawnState = this.#spawnController.snapshot();
+        console.info("Starting Cave Game Phase 10 historical spawn renderer.");
         console.info("WebGL version:", this.#gl.getParameter(this.#gl.VERSION));
         console.info("Chunk processing mode:", chunkState.mode);
         console.info("Initial player chunk:", chunkState.playerChunk.key());
-        console.info("Player dimensions:", PlayerConfig.width, "×", PlayerConfig.height);
+        console.info("Spawn random source:", spawnState.source, spawnState.seed);
         this.#gl.clearColor(SKY_RED, SKY_GREEN, SKY_BLUE, 1);
         this.#debugOverlay.hidden = !this.#debugVisible;
         this.#installListeners();
@@ -204,7 +217,8 @@ class BrowserGame {
         try {
             const frame = this.#timer.advance(timestamp);
             for (let index = 0; index < frame.updateCount; index += 1) {
-                this.#player.update(this.#timer.stepSeconds);
+                const state = this.#player.update(this.#timer.stepSeconds);
+                this.#chunkManager.updatePlayerPosition(state.position[0], state.position[2]);
             }
             const position = this.#player.position;
             this.#chunkManager.updatePlayerPosition(position[0], position[2]);
@@ -238,12 +252,13 @@ class BrowserGame {
         }
         this.#status.hidden = true;
         const playerState = this.#player.snapshot();
+        const spawnState = this.#spawnController.snapshot();
         const chunks = this.#chunkManager.snapshot();
-        this.#updateDebugOverlay(chunks, rendererState);
+        this.#updateDebugOverlay(chunks, rendererState, playerState);
         Object.assign(document.documentElement.dataset, {
             appState: "running",
             webgl: "2",
-            phase: "9",
+            phase: "10",
             drawCalls: String(rendererState.drawCalls),
             glErrors: "0",
             geometry: this.#verifiedGeometry ? "visible" : "pending",
@@ -287,27 +302,54 @@ class BrowserGame {
             brightFog: "none",
             fragmentWorldRaycasts: "0",
             skyColor: "#7FCCFF",
+            spawnModel: "historical-random-xz-y74",
+            spawnY: String(SpawnConfig.y),
+            spawnRange: "0.5-255.5",
+            spawnRandomSource: spawnState.source,
+            spawnRandomSeed: String(spawnState.seed),
+            spawnDebugSeed: spawnState.debugSeed === null ? "none" : String(spawnState.debugSeed),
+            initialSpawn: formatPosition(this.#initialSpawn.position),
+            lastSpawn: spawnState.lastSpawn ? formatPosition(spawnState.lastSpawn.position) : "none",
+            totalSpawns: String(spawnState.totalSpawns),
+            respawnCount: String(spawnState.respawnCount),
+            respawnHeld: String(playerState.rHeld),
+            respawnPerFixedUpdate: "true",
+            playerX: playerState.position[0].toFixed(3),
+            playerY: playerState.position[1].toFixed(3),
+            playerZ: playerState.position[2].toFixed(3),
+            playerVelocityX: playerState.velocityX.toFixed(3),
+            playerVelocityY: playerState.velocityY.toFixed(3),
+            playerVelocityZ: playerState.velocityZ.toFixed(3),
+            playerBelowWorld: String(playerState.belowWorld),
+            automaticVoidRespawn: "false",
+            lowerYClamp: "false",
+            horizontalWorldClamp: "false",
+            voidSafetyLimit: String(VoidSafetyConfig.coordinateLimit),
+            voidSafetyRebase: String(VoidSafetyConfig.rebaseMagnitude),
+            voidSafetyRebases: String(playerState.voidSafetyRebases),
             playerWidth: PlayerConfig.width.toFixed(2),
             playerHeight: PlayerConfig.height.toFixed(2),
             playerEyeHeight: PlayerConfig.eyeHeight.toFixed(2),
             playerGrounded: String(playerState.grounded),
             playerModel: "none",
-            controls: "wasd-space-mouse-f3-h",
+            controls: "wasd-space-r-mouse-f3-h",
         });
     }
 
-    #updateDebugOverlay(chunks, rendererState) {
+    #updateDebugOverlay(chunks, rendererState, playerState) {
         if (!this.#debugVisible) return;
         this.#debugOverlay.textContent = [
-            "CHUNK PROCESSING",
+            "CHUNK / SPAWN DEBUG",
             `Player chunk: ${chunks.playerChunk.key()}`,
+            `Position: ${formatPosition(playerState.position)}`,
             `Queued: ${chunks.queued}`,
             `Meshed: ${chunks.meshed}`,
             `Visible: ${chunks.visible}`,
             `Draw calls: ${rendererState.drawCalls}`,
             `Mode: ${chunks.mode}`,
-            `Budget: ${chunks.maxChunksPerFrame} / ${chunks.frameInterval} frame(s)`,
-            "F3 overlay · H mode",
+            `Respawns: ${playerState.respawnCount}`,
+            `Below Y=0: ${playerState.belowWorld}`,
+            "F3 overlay · H mode · hold R respawn",
         ].join("\n");
     }
 
@@ -364,21 +406,21 @@ class BrowserGame {
     }
 }
 
-function readSeed() {
-    const value = new URLSearchParams(window.location.search).get("seed");
+function readSeed(searchParams) {
+    const value = searchParams.get("seed");
     if (value === null || value.trim() === "") return WorldConfig.defaultSeed;
     const parsed = Number(value);
     return Number.isSafeInteger(parsed) ? parsed : WorldConfig.defaultSeed;
 }
 
-function readLoadingMode() {
-    return new URLSearchParams(window.location.search).get("loading") === "historical"
+function readLoadingMode(searchParams) {
+    return searchParams.get("loading") === "historical"
         ? ChunkProcessingMode.HISTORICAL
         : ChunkProcessingMode.NORMAL;
 }
 
-function readDebugEnabled() {
-    const value = new URLSearchParams(window.location.search).get("debugChunks");
+function readDebugEnabled(searchParams) {
+    const value = searchParams.get("debugChunks");
     return value === "1" || value === "true";
 }
 
@@ -406,32 +448,10 @@ function findNearestSurfaceEntrance(world, generator) {
     return best ?? Object.freeze({ x: centerX, y: generator.terrainHeight(centerX, centerZ), z: centerZ });
 }
 
-function findSpawnNearEntrance(world, entrance) {
-    for (let radius = 5; radius <= 14; radius += 1) {
-        for (let index = 0; index < 24; index += 1) {
-            const angle = index / 24 * Math.PI * 2;
-            const x = Math.round(entrance.x + Math.cos(angle) * radius);
-            const z = Math.round(entrance.z + Math.sin(angle) * radius);
-            if (x < 1 || x >= WorldConfig.maxX || z < 1 || z >= WorldConfig.maxZ) continue;
-            const groundY = highestSolidY(world, x, z);
-            if (groundY < WorldConfig.surfaceMinY) continue;
-            if (!isOpaqueBlock(world.getBlock(x, groundY, z))) continue;
-            if (world.getBlock(x, groundY + 1, z) !== BlockType.AIR) continue;
-            if (world.getBlock(x, groundY + 2, z) !== BlockType.AIR) continue;
-            const position = Object.freeze([x + 0.5, groundY + 1, z + 0.5]);
-            const deltaX = entrance.x + 0.5 - position[0];
-            const deltaZ = entrance.z + 0.5 - position[2];
-            return Object.freeze({ position, yaw: Math.atan2(deltaX, -deltaZ) });
-        }
-    }
-    throw new Error("Unable to find a safe player spawn near the cave entrance");
-}
-
-function highestSolidY(world, x, z) {
-    for (let y = WorldConfig.maxY; y >= WorldConfig.minY; y -= 1) {
-        if (isOpaqueBlock(world.getBlock(x, y, z))) return y;
-    }
-    return -1;
+function yawTowardWorldCenter(position) {
+    const centerX = WorldConfig.sizeX / 2;
+    const centerZ = WorldConfig.sizeZ / 2;
+    return Math.atan2(centerX - position[0], -(centerZ - position[2]));
 }
 
 function measureTerrainRange(generator) {
@@ -445,6 +465,10 @@ function measureTerrainRange(generator) {
         }
     }
     return Object.freeze({ min, max });
+}
+
+function formatPosition(position) {
+    return position.map(value => Number(value).toFixed(3)).join(",");
 }
 
 function verifyGeometryWasDrawn(gl, canvas) {
@@ -463,7 +487,7 @@ function verifyGeometryWasDrawn(gl, canvas) {
     for (let index = 0; index < pixels.length; index += 4) {
         if (pixels[index] !== 127 || pixels[index + 1] !== 204 || pixels[index + 2] !== 255) return;
     }
-    throw new Error("The proximity-loaded cave world did not produce any visible pixels");
+    throw new Error("The historical-spawn cave world did not produce any visible pixels");
 }
 
 function showStartupFailure(status, failure) {
