@@ -94,8 +94,5 @@ function smooth(value) { return value * value * (3 - 2 * value); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function yieldToBrowser() {
-    return new Promise(resolve => {
-        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
-        else setTimeout(resolve, 0);
-    });
+    return new Promise(resolve => setTimeout(resolve, 0));
 }
