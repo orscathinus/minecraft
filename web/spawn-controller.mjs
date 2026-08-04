@@ -13,9 +13,7 @@ export class SpawnRandom {
     #state;
 
     constructor(seed) {
-        if (!Number.isSafeInteger(seed)) {
-            throw new TypeError("spawn random seed must be a safe integer");
-        }
+        if (!Number.isSafeInteger(seed)) throw new TypeError("spawn random seed must be a safe integer");
         this.#state = seed >>> 0;
     }
 
@@ -25,9 +23,7 @@ export class SpawnRandom {
     }
 
     nextInteger(min, max) {
-        if (!Number.isInteger(min) || !Number.isInteger(max) || max < min) {
-            throw new RangeError("spawn integer range is invalid");
-        }
+        if (!Number.isInteger(min) || !Number.isInteger(max) || max < min) throw new RangeError("spawn integer range is invalid");
         const span = max - min + 1;
         return min + Math.floor(this.nextUint32() / 0x100000000 * span);
     }
@@ -41,25 +37,39 @@ export class HistoricalSpawnController {
     #debugSeed;
     #totalSpawns = 0;
     #respawnCount = 0;
-    #lastSpawn = null;
+    #lastBlockX = 0;
+    #lastBlockZ = 0;
+    #hasSpawn = false;
 
     constructor({ debugSeed = null, sessionSeed = null } = {}) {
-        if (debugSeed !== null && !Number.isSafeInteger(debugSeed)) {
-            throw new TypeError("debug spawn seed must be a safe integer or null");
-        }
-        if (sessionSeed !== null && !Number.isSafeInteger(sessionSeed)) {
-            throw new TypeError("session spawn seed must be a safe integer or null");
-        }
+        if (debugSeed !== null && !Number.isSafeInteger(debugSeed)) throw new TypeError("debug spawn seed must be a safe integer or null");
+        if (sessionSeed !== null && !Number.isSafeInteger(sessionSeed)) throw new TypeError("session spawn seed must be a safe integer or null");
         this.#debugSeed = debugSeed;
         this.#seed = debugSeed ?? sessionSeed ?? createSessionSeed();
         this.#random = new SpawnRandom(this.#seed);
     }
 
     createInitialSpawn() {
-        const spawn = this.#nextSpawn();
+        this.#nextCoordinates();
         this.#totalSpawns += 1;
-        this.#lastSpawn = spawn;
-        return spawn;
+        return this.#createSpawnSnapshot();
+    }
+
+    updateHeldFast(playerBody, held) {
+        if (typeof held !== "boolean") throw new TypeError("held must be boolean");
+        if (!held) return false;
+        if (!playerBody || typeof playerBody.respawnXYZ !== "function") {
+            return this.updateHeld(playerBody, true) !== null;
+        }
+        this.#nextCoordinates();
+        playerBody.respawnXYZ(
+            this.#lastBlockX + SpawnConfig.coordinateOffset,
+            SpawnConfig.y,
+            this.#lastBlockZ + SpawnConfig.coordinateOffset,
+        );
+        this.#totalSpawns += 1;
+        this.#respawnCount += 1;
+        return true;
     }
 
     updateHeld(playerBody, held) {
@@ -71,44 +81,57 @@ export class HistoricalSpawnController {
         if (!playerBody || typeof playerBody.respawn !== "function") {
             throw new TypeError("respawnPlayer requires a player body with respawn(position)");
         }
-        const spawn = this.#nextSpawn();
+        this.#nextCoordinates();
+        const spawn = this.#createSpawnSnapshot();
         const state = playerBody.respawn(spawn.position);
         this.#totalSpawns += 1;
         this.#respawnCount += 1;
-        this.#lastSpawn = spawn;
         return Object.freeze({ spawn, state });
     }
 
-    snapshot() {
-        return Object.freeze({
-            seed: this.#seed,
-            debugSeed: this.#debugSeed,
-            source: this.#debugSeed === null ? "session-random" : "fixed-debug-seed",
-            totalSpawns: this.#totalSpawns,
-            respawnCount: this.#respawnCount,
-            lastSpawn: this.#lastSpawn,
-        });
+    writeSnapshot(target) {
+        if (!target || typeof target !== "object") throw new TypeError("spawn snapshot target must be an object");
+        target.seed = this.#seed;
+        target.debugSeed = this.#debugSeed;
+        target.source = this.#debugSeed === null ? "session-random" : "fixed-debug-seed";
+        target.totalSpawns = this.#totalSpawns;
+        target.respawnCount = this.#respawnCount;
+        target.hasSpawn = this.#hasSpawn;
+        target.lastBlockX = this.#lastBlockX;
+        target.lastBlockZ = this.#lastBlockZ;
+        target.lastX = this.#lastBlockX + SpawnConfig.coordinateOffset;
+        target.lastY = SpawnConfig.y;
+        target.lastZ = this.#lastBlockZ + SpawnConfig.coordinateOffset;
+        return target;
     }
 
-    #nextSpawn() {
-        const blockX = this.#random.nextInteger(SpawnConfig.minBlockX, SpawnConfig.maxBlockX);
-        const blockZ = this.#random.nextInteger(SpawnConfig.minBlockZ, SpawnConfig.maxBlockZ);
+    snapshot() {
+        const state = this.writeSnapshot({});
+        state.lastSpawn = state.hasSpawn ? this.#createSpawnSnapshot() : null;
+        return Object.freeze(state);
+    }
+
+    #nextCoordinates() {
+        this.#lastBlockX = this.#random.nextInteger(SpawnConfig.minBlockX, SpawnConfig.maxBlockX);
+        this.#lastBlockZ = this.#random.nextInteger(SpawnConfig.minBlockZ, SpawnConfig.maxBlockZ);
+        this.#hasSpawn = true;
+    }
+
+    #createSpawnSnapshot() {
         return Object.freeze({
-            blockX,
-            blockZ,
+            blockX: this.#lastBlockX,
+            blockZ: this.#lastBlockZ,
             position: Object.freeze([
-                blockX + SpawnConfig.coordinateOffset,
+                this.#lastBlockX + SpawnConfig.coordinateOffset,
                 SpawnConfig.y,
-                blockZ + SpawnConfig.coordinateOffset,
+                this.#lastBlockZ + SpawnConfig.coordinateOffset,
             ]),
         });
     }
 }
 
 export function readSpawnDebugSeed(searchParams) {
-    if (!(searchParams instanceof URLSearchParams)) {
-        throw new TypeError("readSpawnDebugSeed requires URLSearchParams");
-    }
+    if (!(searchParams instanceof URLSearchParams)) throw new TypeError("readSpawnDebugSeed requires URLSearchParams");
     const value = searchParams.get("spawnSeed");
     if (value === null || value.trim() === "") return null;
     const parsed = Number(value);

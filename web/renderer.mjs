@@ -1,6 +1,7 @@
 import { ATLAS_HEIGHT, ATLAS_WIDTH, createAtlasPixels } from "./atlas.mjs";
 import { CHUNK_VERTEX_FLOATS } from "./chunk-mesh.mjs";
 import { configurePixelTextureSampling } from "./pixel-texture-sampling.mjs";
+import { WorldConfig } from "./world-config.mjs";
 
 const ERROR_NAMES = new Map([
     [0x0500, "INVALID_ENUM"],
@@ -20,7 +21,18 @@ export class VoxelRenderer {
     #view;
     #atlas;
     #drawCalls = 0;
+    #frustumCulledChunks = 0;
+    #renderedTriangles = 0;
     #totalUploads = 0;
+    #totalUploadMs = 0;
+    #faceCount = 0;
+    #brightFaceCount = 0;
+    #darkFaceCount = 0;
+    #triangleCount = 0;
+    #meshBytes = 0;
+    #peakMeshBytes = 0;
+    #clipMatrix = new Float32Array(16);
+    #frustumPlanes = new Float32Array(24);
 
     static async create(gl) {
         const [vertexSource, fragmentSource] = await Promise.all([
@@ -49,10 +61,18 @@ export class VoxelRenderer {
     uploadChunkMesh(position, meshData, { reason = "initial" } = {}) {
         const key = chunkKey(position);
         const previous = this.#meshes.get(key);
-        const next = new GpuMesh(this.#gl, meshData, { key, reason });
-        previous?.dispose();
+        const started = performanceNow();
+        const next = new GpuMesh(this.#gl, position, meshData, { reason });
+        const uploadMs = performanceNow() - started;
+
+        if (previous) {
+            this.#subtractMesh(previous);
+            previous.dispose();
+        }
         this.#meshes.set(key, next);
+        this.#addMesh(next);
         this.#totalUploads += 1;
+        this.#totalUploadMs += uploadMs;
         assertNoGlErrors(this.#gl, `chunk mesh upload ${key}`);
         return previous !== undefined;
     }
@@ -61,6 +81,7 @@ export class VoxelRenderer {
         const key = chunkKey(position);
         const mesh = this.#meshes.get(key);
         if (!mesh) return false;
+        this.#subtractMesh(mesh);
         mesh.dispose();
         this.#meshes.delete(key);
         return true;
@@ -69,9 +90,16 @@ export class VoxelRenderer {
     clearChunkMeshes() {
         for (const mesh of this.#meshes.values()) mesh.dispose();
         this.#meshes.clear();
+        this.#faceCount = 0;
+        this.#brightFaceCount = 0;
+        this.#darkFaceCount = 0;
+        this.#triangleCount = 0;
+        this.#meshBytes = 0;
+        this.#drawCalls = 0;
+        this.#frustumCulledChunks = 0;
+        this.#renderedTriangles = 0;
     }
 
-    // Retained for small isolated renderer tests and legacy development tools.
     setMesh(meshData) {
         this.clearChunkMeshes();
         this.uploadChunkMesh({ key: () => "aggregate" }, meshData, { reason: "aggregate" });
@@ -79,37 +107,56 @@ export class VoxelRenderer {
 
     render(projectionMatrix, viewMatrix) {
         const gl = this.#gl;
+        updateFrustumPlanes(projectionMatrix, viewMatrix, this.#clipMatrix, this.#frustumPlanes);
         gl.useProgram(this.#program);
         gl.uniformMatrix4fv(this.#projection, false, projectionMatrix);
         gl.uniformMatrix4fv(this.#view, false, viewMatrix);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.#texture);
         gl.uniform1i(this.#atlas, 0);
+
         let drawCalls = 0;
+        let culled = 0;
+        let renderedTriangles = 0;
         for (const mesh of this.#meshes.values()) {
-            if (mesh.draw()) drawCalls += 1;
+            if (!aabbIntersectsFrustum(mesh, this.#frustumPlanes)) {
+                culled += 1;
+                continue;
+            }
+            if (mesh.draw()) {
+                drawCalls += 1;
+                renderedTriangles += mesh.triangleCount;
+            }
         }
+        gl.bindVertexArray(null);
         this.#drawCalls = drawCalls;
-        assertNoGlErrors(gl, "frame render");
+        this.#frustumCulledChunks = culled;
+        this.#renderedTriangles = renderedTriangles;
+    }
+
+    writeStats(target) {
+        if (!target || typeof target !== "object") throw new TypeError("renderer stats target must be an object");
+        target.visibleChunks = this.#meshes.size;
+        target.drawCalls = this.#drawCalls;
+        target.frustumCulledChunks = this.#frustumCulledChunks;
+        target.faceCount = this.#faceCount;
+        target.brightFaceCount = this.#brightFaceCount;
+        target.darkFaceCount = this.#darkFaceCount;
+        target.triangleCount = this.#triangleCount;
+        target.renderedTriangles = this.#renderedTriangles;
+        target.meshBytes = this.#meshBytes;
+        target.peakMeshBytes = this.#peakMeshBytes;
+        target.totalUploads = this.#totalUploads;
+        target.totalUploadMs = this.#totalUploadMs;
+        target.averageUploadMs = this.#totalUploads === 0 ? 0 : this.#totalUploadMs / this.#totalUploads;
+        target.liveGpuMeshes = this.#meshes.size;
+        target.liveGpuBuffers = this.#meshes.size * 2;
+        target.liveVertexArrays = this.#meshes.size;
+        return target;
     }
 
     stats() {
-        let faceCount = 0;
-        let brightFaceCount = 0;
-        let darkFaceCount = 0;
-        for (const mesh of this.#meshes.values()) {
-            faceCount += mesh.faceCount;
-            brightFaceCount += mesh.brightFaceCount;
-            darkFaceCount += mesh.darkFaceCount;
-        }
-        return Object.freeze({
-            visibleChunks: this.#meshes.size,
-            drawCalls: this.#drawCalls,
-            faceCount,
-            brightFaceCount,
-            darkFaceCount,
-            totalUploads: this.#totalUploads,
-        });
+        return Object.freeze(this.writeStats({}));
     }
 
     get drawCalls() { return this.#drawCalls; }
@@ -127,21 +174,46 @@ export class VoxelRenderer {
             this.#program = null;
         }
     }
+
+    #addMesh(mesh) {
+        this.#faceCount += mesh.faceCount;
+        this.#brightFaceCount += mesh.brightFaceCount;
+        this.#darkFaceCount += mesh.darkFaceCount;
+        this.#triangleCount += mesh.triangleCount;
+        this.#meshBytes += mesh.byteLength;
+        this.#peakMeshBytes = Math.max(this.#peakMeshBytes, this.#meshBytes);
+    }
+
+    #subtractMesh(mesh) {
+        this.#faceCount -= mesh.faceCount;
+        this.#brightFaceCount -= mesh.brightFaceCount;
+        this.#darkFaceCount -= mesh.darkFaceCount;
+        this.#triangleCount -= mesh.triangleCount;
+        this.#meshBytes -= mesh.byteLength;
+    }
 }
 
 class GpuMesh {
     #gl;
-    #vao;
-    #vbo;
-    #ebo;
+    #vao = null;
+    #vbo = null;
+    #ebo = null;
     #count;
     #type;
     #faceCount;
     #brightFaceCount;
     #darkFaceCount;
     #reason;
+    #triangleCount;
+    #byteLength;
+    minX;
+    minY;
+    minZ;
+    maxX;
+    maxY;
+    maxZ;
 
-    constructor(gl, data, { reason }) {
+    constructor(gl, position, data, { reason }) {
         validateMesh(data);
         this.#gl = gl;
         this.#count = data.indices.length;
@@ -150,33 +222,41 @@ class GpuMesh {
         this.#brightFaceCount = data.brightFaceCount ?? 0;
         this.#darkFaceCount = data.darkFaceCount ?? Math.max(0, this.#faceCount - this.#brightFaceCount);
         this.#reason = reason;
-        this.#vao = required(gl.createVertexArray(), "vertex array");
-        this.#vbo = required(gl.createBuffer(), "vertex buffer");
-        this.#ebo = required(gl.createBuffer(), "index buffer");
+        this.#triangleCount = Math.floor(data.indices.length / 3);
+        this.#byteLength = data.vertices.byteLength + data.indices.byteLength;
+        setChunkBounds(this, position);
 
-        gl.bindVertexArray(this.#vao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.#vbo);
-        gl.bufferData(gl.ARRAY_BUFFER, data.vertices, gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.#ebo);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data.indices, gl.STATIC_DRAW);
+        try {
+            this.#vao = required(gl.createVertexArray(), "vertex array");
+            this.#vbo = required(gl.createBuffer(), "vertex buffer");
+            this.#ebo = required(gl.createBuffer(), "index buffer");
 
-        const stride = CHUNK_VERTEX_FLOATS * Float32Array.BYTES_PER_ELEMENT;
-        gl.enableVertexAttribArray(0);
-        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
-        gl.enableVertexAttribArray(1);
-        gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 12);
-        gl.enableVertexAttribArray(2);
-        gl.vertexAttribPointer(2, 1, gl.FLOAT, false, stride, 20);
-        gl.bindVertexArray(null);
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            gl.bindVertexArray(this.#vao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.#vbo);
+            gl.bufferData(gl.ARRAY_BUFFER, data.vertices, gl.STATIC_DRAW);
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.#ebo);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data.indices, gl.STATIC_DRAW);
+
+            const stride = CHUNK_VERTEX_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+            gl.enableVertexAttribArray(0);
+            gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
+            gl.enableVertexAttribArray(1);
+            gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 12);
+            gl.enableVertexAttribArray(2);
+            gl.vertexAttribPointer(2, 1, gl.FLOAT, false, stride, 20);
+            gl.bindVertexArray(null);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        } catch (failure) {
+            this.dispose();
+            throw failure;
+        }
     }
 
     draw() {
-        if (this.#count === 0) return false;
+        if (this.#count === 0 || !this.#vao) return false;
         const gl = this.#gl;
         gl.bindVertexArray(this.#vao);
         gl.drawElements(gl.TRIANGLES, this.#count, this.#type, 0);
-        gl.bindVertexArray(null);
         return true;
     }
 
@@ -184,6 +264,8 @@ class GpuMesh {
     get brightFaceCount() { return this.#brightFaceCount; }
     get darkFaceCount() { return this.#darkFaceCount; }
     get reason() { return this.#reason; }
+    get triangleCount() { return this.#triangleCount; }
+    get byteLength() { return this.#byteLength; }
 
     dispose() {
         const gl = this.#gl;
@@ -196,21 +278,80 @@ class GpuMesh {
     }
 }
 
+export function updateFrustumPlanes(projection, view, clip, planes) {
+    if (!(projection instanceof Float32Array) || projection.length !== 16
+        || !(view instanceof Float32Array) || view.length !== 16
+        || !(clip instanceof Float32Array) || clip.length !== 16
+        || !(planes instanceof Float32Array) || planes.length !== 24) {
+        throw new TypeError("frustum matrices and plane storage have invalid dimensions");
+    }
+    multiplyMatrix4(clip, projection, view);
+    writePlane(planes, 0, clip[3] + clip[0], clip[7] + clip[4], clip[11] + clip[8], clip[15] + clip[12]);
+    writePlane(planes, 4, clip[3] - clip[0], clip[7] - clip[4], clip[11] - clip[8], clip[15] - clip[12]);
+    writePlane(planes, 8, clip[3] + clip[1], clip[7] + clip[5], clip[11] + clip[9], clip[15] + clip[13]);
+    writePlane(planes, 12, clip[3] - clip[1], clip[7] - clip[5], clip[11] - clip[9], clip[15] - clip[13]);
+    writePlane(planes, 16, clip[3] + clip[2], clip[7] + clip[6], clip[11] + clip[10], clip[15] + clip[14]);
+    writePlane(planes, 20, clip[3] - clip[2], clip[7] - clip[6], clip[11] - clip[10], clip[15] - clip[14]);
+    return planes;
+}
+
+export function aabbIntersectsFrustum(bounds, planes) {
+    for (let offset = 0; offset < 24; offset += 4) {
+        const a = planes[offset];
+        const b = planes[offset + 1];
+        const c = planes[offset + 2];
+        const d = planes[offset + 3];
+        const x = a >= 0 ? bounds.maxX : bounds.minX;
+        const y = b >= 0 ? bounds.maxY : bounds.minY;
+        const z = c >= 0 ? bounds.maxZ : bounds.minZ;
+        if (a * x + b * y + c * z + d < 0) return false;
+    }
+    return true;
+}
+
+function multiplyMatrix4(out, a, b) {
+    for (let column = 0; column < 4; column += 1) {
+        const b0 = b[column * 4];
+        const b1 = b[column * 4 + 1];
+        const b2 = b[column * 4 + 2];
+        const b3 = b[column * 4 + 3];
+        out[column * 4] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+        out[column * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+        out[column * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+        out[column * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+    }
+}
+
+function writePlane(planes, offset, a, b, c, d) {
+    const length = Math.hypot(a, b, c);
+    const inverse = length > 0 ? 1 / length : 1;
+    planes[offset] = a * inverse;
+    planes[offset + 1] = b * inverse;
+    planes[offset + 2] = c * inverse;
+    planes[offset + 3] = d * inverse;
+}
+
+function setChunkBounds(target, position) {
+    if (Number.isInteger(position?.x) && Number.isInteger(position?.z)) {
+        target.minX = position.x * WorldConfig.chunkWidth;
+        target.maxX = target.minX + WorldConfig.chunkWidth;
+        target.minZ = position.z * WorldConfig.chunkDepth;
+        target.maxZ = target.minZ + WorldConfig.chunkDepth;
+    } else {
+        target.minX = WorldConfig.minX;
+        target.maxX = WorldConfig.maxX + 1;
+        target.minZ = WorldConfig.minZ;
+        target.maxZ = WorldConfig.maxZ + 1;
+    }
+    target.minY = WorldConfig.minY;
+    target.maxY = WorldConfig.maxY + 1;
+}
+
 function createAtlasTexture(gl) {
     const texture = required(gl.createTexture(), "texture");
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA,
-        ATLAS_WIDTH,
-        ATLAS_HEIGHT,
-        0,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        createAtlasPixels(),
-    );
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, ATLAS_WIDTH, ATLAS_HEIGHT, 0, gl.RGBA, gl.UNSIGNED_BYTE, createAtlasPixels());
     configurePixelTextureSampling(gl);
     gl.bindTexture(gl.TEXTURE_2D, null);
     return texture;
@@ -260,29 +401,25 @@ function required(value, label) {
 }
 
 function validateMesh(data) {
-    if (!(data?.vertices instanceof Float32Array)) {
-        throw new TypeError("meshData.vertices must be Float32Array");
-    }
+    if (!(data?.vertices instanceof Float32Array)) throw new TypeError("meshData.vertices must be Float32Array");
     if (!(data?.indices instanceof Uint16Array) && !(data?.indices instanceof Uint32Array)) {
         throw new TypeError("meshData.indices must be Uint16Array or Uint32Array");
     }
-    if (data.vertices.length % CHUNK_VERTEX_FLOATS !== 0) {
-        throw new RangeError("Mesh vertex data has an invalid stride");
-    }
+    if (data.vertices.length % CHUNK_VERTEX_FLOATS !== 0) throw new RangeError("Mesh vertex data has an invalid stride");
 }
 
 function chunkKey(position) {
-    if (!position || typeof position.key !== "function") {
-        throw new TypeError("chunk position must provide key()");
-    }
+    if (!position || typeof position.key !== "function") throw new TypeError("chunk position must provide key()");
     return position.key();
+}
+
+function performanceNow() {
+    return globalThis.performance?.now?.() ?? Date.now();
 }
 
 async function loadText(url) {
     const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`Unable to load shader resource ${url.pathname}: HTTP ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`Unable to load shader resource ${url.pathname}: HTTP ${response.status}`);
     return response.text();
 }
 

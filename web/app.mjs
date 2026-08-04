@@ -1,17 +1,14 @@
 import { BlockType } from "./block-type.mjs";
-import { ChunkManager, ChunkProcessingMode } from "./chunk-manager.mjs";
+import { ChunkManager, ChunkProcessingConfig, ChunkProcessingMode } from "./chunk-manager.mjs";
 import { CaveGenerator } from "./cave-generator.mjs";
 import { FirstPersonPlayer } from "./first-person-player.mjs";
 import { FixedStepTimer } from "./fixed-step-timer.mjs";
-import { perspectiveMatrix } from "./math.mjs";
+import { perspectiveMatrixInto } from "./math.mjs";
+import { DiagnosticsConfig, performanceNow, RuntimeDiagnostics } from "./performance-diagnostics.mjs";
 import { PlayerConfig, VoidSafetyConfig } from "./player-physics.mjs";
 import { VoxelRenderer } from "./renderer.mjs";
 import { LightingConfig, SunlightModel } from "./sunlight.mjs";
-import {
-    HistoricalSpawnController,
-    readSpawnDebugSeed,
-    SpawnConfig,
-} from "./spawn-controller.mjs";
+import { HistoricalSpawnController, readSpawnDebugSeed, SpawnConfig } from "./spawn-controller.mjs";
 import { SeededTerrainGenerator } from "./terrain-generator.mjs";
 import { WorldConfig } from "./world-config.mjs";
 
@@ -30,6 +27,7 @@ class BrowserGame {
     #chunkManager;
     #spawnController;
     #initialSpawn;
+    #diagnostics;
     #gl;
     #seed;
     #terrainRange;
@@ -47,6 +45,16 @@ class BrowserGame {
     #resizeObserver = null;
     #listeners = [];
     #verifiedGeometry = false;
+    #projectionMatrix = new Float32Array(16);
+    #rendererState = {};
+    #chunkState = {};
+    #playerState = {};
+    #spawnState = {};
+    #diagnosticsState = {};
+    #metadataCountdown = 0;
+    #verificationPixels = null;
+    #verificationWidth = 0;
+    #verificationHeight = 0;
 
     static async create(canvas, status, debugOverlay) {
         const gl = canvas.getContext("webgl2", {
@@ -60,22 +68,28 @@ class BrowserGame {
 
         const searchParams = new URLSearchParams(window.location.search);
         const seed = readSeed(searchParams);
+        const diagnostics = new RuntimeDiagnostics();
         const generator = new SeededTerrainGenerator(seed);
+
+        const worldStarted = performanceNow();
         status.textContent = `Generating finite world · seed ${seed} · 0%`;
         const world = await generator.generateWorld({
             onProgress(completed, total) {
-                const percent = Math.round(completed / total * 100);
-                status.textContent = `Generating finite world · seed ${seed} · ${percent}%`;
+                status.textContent = `Generating finite world · seed ${seed} · ${Math.round(completed / total * 100)}%`;
             },
         });
+        const worldGenerationMs = performanceNow() - worldStarted;
 
+        const caveStarted = performanceNow();
         status.textContent = "Carving primitive caves · 0%";
         const caveResult = await new CaveGenerator(seed).carveWorld(world, {
             onProgress(completed, total) {
                 status.textContent = `Carving primitive caves · ${Math.round(completed / total * 100)}%`;
             },
         });
+        const caveGenerationMs = performanceNow() - caveStarted;
 
+        const sunlightStarted = performanceNow();
         status.textContent = "Calculating BRIGHT / DARK sunlight · 0%";
         const sunlight = new SunlightModel(world);
         await sunlight.rebuildAll({
@@ -83,6 +97,8 @@ class BrowserGame {
                 status.textContent = `Calculating BRIGHT / DARK sunlight · ${Math.round(completed / total * 100)}%`;
             },
         });
+        const sunlightGenerationMs = performanceNow() - sunlightStarted;
+        diagnostics.setGenerationDurations(worldGenerationMs, caveGenerationMs, sunlightGenerationMs);
 
         status.textContent = "Choosing historical random spawn at Y=74…";
         world.clearDirtyChunks();
@@ -108,8 +124,9 @@ class BrowserGame {
             initialSpawn,
             loadingMode: readLoadingMode(searchParams),
             debugVisible: readDebugEnabled(searchParams),
+            diagnostics,
         });
-        game.#chunkManager.processFrame({ maxChunks: 1, ignoreInterval: true });
+        game.#chunkManager.processFrame({ maxChunks: 1, ignoreInterval: true, collectResults: false });
         return game;
     }
 
@@ -129,6 +146,7 @@ class BrowserGame {
         initialSpawn,
         loadingMode,
         debugVisible,
+        diagnostics,
     }) {
         this.#canvas = canvas;
         this.#status = status;
@@ -142,6 +160,7 @@ class BrowserGame {
         this.#spawnController = spawnController;
         this.#initialSpawn = initialSpawn;
         this.#debugVisible = debugVisible;
+        this.#diagnostics = diagnostics;
         this.#player = new FirstPersonPlayer(canvas, world, {
             position: initialSpawn.position,
             yaw: yawTowardSpawnChunkCenter(initialSpawn.position),
@@ -155,19 +174,21 @@ class BrowserGame {
     }
 
     start() {
-        const chunkState = this.#chunkManager.snapshot();
-        const spawnState = this.#spawnController.snapshot();
-        console.info("Starting Cave Game Phase 10 historical spawn renderer.");
+        this.#chunkManager.writeSnapshot(this.#chunkState);
+        this.#spawnController.writeSnapshot(this.#spawnState);
+        console.info("Starting Cave Game Phase 11 profiled and stabilized browser build.");
         console.info("WebGL version:", this.#gl.getParameter(this.#gl.VERSION));
-        console.info("Chunk processing mode:", chunkState.mode);
-        console.info("Initial player chunk:", chunkState.playerChunk.key());
-        console.info("Spawn random source:", spawnState.source, spawnState.seed);
+        console.info("Chunk processing mode:", this.#chunkState.mode);
+        console.info("Initial player chunk:", this.#chunkState.playerChunk.key());
+        console.info("Spawn random source:", this.#spawnState.source, this.#spawnState.seed);
         this.#gl.clearColor(SKY_RED, SKY_GREEN, SKY_BLUE, 1);
         this.#debugOverlay.hidden = !this.#debugVisible;
         this.#installListeners();
         this.#resize();
         this.#running = true;
-        this.#timer.reset(performance.now());
+        const started = performance.now();
+        this.#timer.reset(started);
+        this.#diagnostics.resetFrameClock(started);
         this.#animationFrame = requestAnimationFrame(this.#frame);
     }
 
@@ -188,24 +209,25 @@ class BrowserGame {
         for (const [target, type, listener, options] of this.#listeners) {
             target.removeEventListener(type, listener, options);
         }
-        this.#listeners = [];
+        this.#listeners.length = 0;
         this.#player.dispose();
         this.#chunkManager.dispose();
         this.#renderer.dispose();
+        this.#verificationPixels = null;
         this.#closed = true;
     }
 
     #frame = timestamp => {
         if (!this.#running) return;
         try {
+            this.#diagnostics.recordFrame(timestamp);
             const frame = this.#timer.advance(timestamp);
             for (let index = 0; index < frame.updateCount; index += 1) {
-                const state = this.#player.update(this.#timer.stepSeconds);
-                this.#chunkManager.updatePlayerPosition(state.position[0], state.position[2]);
+                this.#player.advance(this.#timer.stepSeconds);
+                this.#chunkManager.updatePlayerPosition(this.#player.x, this.#player.z);
             }
-            const position = this.#player.position;
-            this.#chunkManager.updatePlayerPosition(position[0], position[2]);
-            this.#chunkManager.processFrame();
+            this.#chunkManager.updatePlayerPosition(this.#player.x, this.#player.z);
+            this.#chunkManager.processFrameFast();
             this.#render(frame.interpolationAlpha);
             this.#animationFrame = requestAnimationFrame(this.#frame);
         } catch (failure) {
@@ -218,49 +240,72 @@ class BrowserGame {
     #render(interpolationAlpha) {
         if (interpolationAlpha < 0 || interpolationAlpha >= 1) throw new Error("Interpolation alpha must be in [0, 1)");
         this.#resize();
-        const projection = perspectiveMatrix(
+        perspectiveMatrixInto(
+            this.#projectionMatrix,
             FIELD_OF_VIEW_RADIANS,
             this.#canvas.width / this.#canvas.height,
             0.05,
             512,
         );
         this.#gl.clear(this.#gl.COLOR_BUFFER_BIT | this.#gl.DEPTH_BUFFER_BIT);
-        this.#renderer.render(projection, this.#player.viewMatrix());
-        const rendererState = this.#renderer.stats();
-        if (!this.#verifiedGeometry && rendererState.visibleChunks > 0) {
-            this.#verifiedGeometry = geometryWasDrawn(this.#gl, this.#canvas);
+        this.#renderer.render(this.#projectionMatrix, this.#player.viewMatrix());
+        this.#renderer.writeStats(this.#rendererState);
+        if (!this.#verifiedGeometry && this.#rendererState.drawCalls > 0) {
+            this.#verifiedGeometry = this.#geometryWasDrawn();
         }
         this.#status.hidden = true;
-        const playerState = this.#player.snapshot();
-        const spawnState = this.#spawnController.snapshot();
-        const chunks = this.#chunkManager.snapshot();
-        this.#updateDebugOverlay(chunks, rendererState, playerState);
+
+        if (this.#metadataCountdown <= 0) {
+            this.#metadataCountdown = DiagnosticsConfig.metadataUpdateFrames - 1;
+            this.#publishDiagnostics();
+        } else {
+            this.#metadataCountdown -= 1;
+        }
+    }
+
+    #publishDiagnostics() {
+        this.#player.writeSnapshot(this.#playerState);
+        this.#spawnController.writeSnapshot(this.#spawnState);
+        this.#chunkManager.writeSnapshot(this.#chunkState);
+        this.#renderer.writeStats(this.#rendererState);
+        this.#diagnostics.writeSnapshot(this.#diagnosticsState, this.#chunkState, this.#rendererState);
+        this.#updateDebugOverlay();
+
         Object.assign(document.documentElement.dataset, {
             appState: "running",
             webgl: "2",
-            phase: "10",
-            drawCalls: String(rendererState.drawCalls),
+            phase: "11",
+            drawCalls: String(this.#rendererState.drawCalls),
             glErrors: "0",
             geometry: this.#verifiedGeometry ? "visible" : "pending",
-            chunkCount: String(chunks.totalChunks),
-            chunksQueued: String(chunks.queued),
-            chunksMeshed: String(chunks.meshed),
-            chunksVisible: String(chunks.visible),
-            chunkProcessingMode: chunks.mode,
-            chunkMaxPerFrame: String(chunks.maxChunksPerFrame),
-            chunkFrameInterval: String(chunks.frameInterval),
+            chunkCount: String(this.#chunkState.totalChunks),
+            chunksQueued: String(this.#chunkState.queued),
+            chunksMeshed: String(this.#chunkState.meshed),
+            chunksVisible: String(this.#chunkState.visible),
+            chunksFrustumCulled: String(this.#rendererState.frustumCulledChunks),
+            chunkProcessingMode: this.#chunkState.mode,
+            chunkMaxPerFrame: String(this.#chunkState.maxChunksPerFrame),
+            chunkFrameInterval: String(this.#chunkState.frameInterval),
+            normalMeshBudget: String(ChunkProcessingConfig.normal.maxChunksPerFrame),
+            historicalMeshBudget: String(ChunkProcessingConfig.historical.maxChunksPerFrame),
+            historicalFrameInterval: String(ChunkProcessingConfig.historical.frameInterval),
             chunkPriority: "squared-horizontal-distance",
             chunkTieBreak: "z-then-x",
             staleWorkPolicy: "epoch-reprioritize",
-            playerChunk: chunks.playerChunk.key(),
-            firstVisibleChunk: chunks.firstVisibleChunk?.key() ?? "none",
-            lastProcessedChunk: chunks.lastProcessedChunk?.key() ?? "none",
-            chunkLoadingComplete: String(chunks.complete),
-            chunkUploads: String(chunks.totalUploads),
-            unnecessaryDuplicateUploads: String(chunks.unnecessaryDuplicateUploads),
-            worldFaces: String(rendererState.faceCount),
-            brightFaces: String(rendererState.brightFaceCount),
-            darkFaces: String(rendererState.darkFaceCount),
+            playerChunk: this.#chunkState.playerChunk.key(),
+            firstVisibleChunk: this.#chunkState.firstVisibleChunk?.key() ?? "none",
+            lastProcessedChunk: this.#chunkState.lastProcessedChunk?.key() ?? "none",
+            chunkLoadingComplete: String(this.#chunkState.complete),
+            chunkUploads: String(this.#chunkState.totalUploads),
+            unnecessaryDuplicateUploads: String(this.#chunkState.unnecessaryDuplicateUploads),
+            worldFaces: String(this.#rendererState.faceCount),
+            worldTriangles: String(this.#rendererState.triangleCount),
+            renderedTriangles: String(this.#rendererState.renderedTriangles),
+            brightFaces: String(this.#rendererState.brightFaceCount),
+            darkFaces: String(this.#rendererState.darkFaceCount),
+            hiddenFacesOmitted: "true",
+            frustumCulling: "true",
+            distanceCulling: "false",
             worldBounds: "0-255,0-63,0-255",
             terrainRange: `${WorldConfig.surfaceMinY}-${WorldConfig.surfaceMaxY}`,
             actualTerrainRange: `${this.#terrainRange.min}-${this.#terrainRange.max}`,
@@ -285,51 +330,75 @@ class BrowserGame {
             spawnModel: "historical-random-xz-y74",
             spawnY: String(SpawnConfig.y),
             spawnRange: "0.5-255.5",
-            spawnRandomSource: spawnState.source,
-            spawnRandomSeed: String(spawnState.seed),
-            spawnDebugSeed: spawnState.debugSeed === null ? "none" : String(spawnState.debugSeed),
+            spawnRandomSource: this.#spawnState.source,
+            spawnRandomSeed: String(this.#spawnState.seed),
+            spawnDebugSeed: this.#spawnState.debugSeed === null ? "none" : String(this.#spawnState.debugSeed),
             initialSpawn: formatPosition(this.#initialSpawn.position),
-            lastSpawn: spawnState.lastSpawn ? formatPosition(spawnState.lastSpawn.position) : "none",
-            totalSpawns: String(spawnState.totalSpawns),
-            respawnCount: String(spawnState.respawnCount),
-            respawnHeld: String(playerState.rHeld),
+            lastSpawn: formatPositionXYZ(this.#spawnState.lastX, this.#spawnState.lastY, this.#spawnState.lastZ),
+            totalSpawns: String(this.#spawnState.totalSpawns),
+            respawnCount: String(this.#spawnState.respawnCount),
+            respawnHeld: String(this.#playerState.rHeld),
             respawnPerFixedUpdate: "true",
-            playerX: playerState.position[0].toFixed(3),
-            playerY: playerState.position[1].toFixed(3),
-            playerZ: playerState.position[2].toFixed(3),
-            playerVelocityX: playerState.velocityX.toFixed(3),
-            playerVelocityY: playerState.velocityY.toFixed(3),
-            playerVelocityZ: playerState.velocityZ.toFixed(3),
-            playerBelowWorld: String(playerState.belowWorld),
+            playerX: this.#playerState.x.toFixed(3),
+            playerY: this.#playerState.y.toFixed(3),
+            playerZ: this.#playerState.z.toFixed(3),
+            playerVelocityX: this.#playerState.velocityX.toFixed(3),
+            playerVelocityY: this.#playerState.velocityY.toFixed(3),
+            playerVelocityZ: this.#playerState.velocityZ.toFixed(3),
+            playerBelowWorld: String(this.#playerState.belowWorld),
             automaticVoidRespawn: "false",
             lowerYClamp: "false",
             horizontalWorldClamp: "false",
             voidSafetyLimit: String(VoidSafetyConfig.coordinateLimit),
             voidSafetyRebase: String(VoidSafetyConfig.rebaseMagnitude),
-            voidSafetyRebases: String(playerState.voidSafetyRebases),
+            voidSafetyRebases: String(this.#playerState.voidSafetyRebases),
             playerWidth: PlayerConfig.width.toFixed(2),
             playerHeight: PlayerConfig.height.toFixed(2),
             playerEyeHeight: PlayerConfig.eyeHeight.toFixed(2),
-            playerGrounded: String(playerState.grounded),
+            playerGrounded: String(this.#playerState.grounded),
             playerModel: "none",
             controls: "wasd-space-r-mouse-f3-h",
+            profiling: "runtime-and-command",
+            worldGenerationMs: this.#diagnosticsState.worldGenerationMs.toFixed(3),
+            caveGenerationMs: this.#diagnosticsState.caveGenerationMs.toFixed(3),
+            sunlightGenerationMs: this.#diagnosticsState.sunlightGenerationMs.toFixed(3),
+            averageChunkMeshMs: this.#diagnosticsState.averageChunkMeshMs.toFixed(3),
+            totalChunkMeshMs: this.#diagnosticsState.totalChunkMeshMs.toFixed(3),
+            averageUploadMs: this.#diagnosticsState.averageUploadMs.toFixed(3),
+            totalUploadMs: this.#diagnosticsState.totalUploadMs.toFixed(3),
+            averageFrameMs: this.#diagnosticsState.averageFrameMs.toFixed(3),
+            peakFrameMs: this.#diagnosticsState.peakFrameMs.toFixed(3),
+            blockArrayBytes: String(this.#diagnosticsState.blockArrayBytes),
+            sunlightBytes: String(this.#diagnosticsState.sunlightBytes),
+            chunkMeshBytes: String(this.#diagnosticsState.chunkMeshBytes),
+            peakChunkMeshBytes: String(this.#diagnosticsState.peakChunkMeshBytes),
+            peakPendingChunks: String(this.#diagnosticsState.peakPendingChunks),
+            liveGpuMeshes: String(this.#diagnosticsState.liveGpuMeshes),
+            liveGpuBuffers: String(this.#diagnosticsState.liveGpuBuffers),
+            hotPathAllocationPolicy: "reused-typed-arrays-and-snapshots",
+            metadataUpdateFrames: String(DiagnosticsConfig.metadataUpdateFrames),
+            unchangedChunkRebuilds: "false",
+            threadModel: "single-render-thread",
+            workerThreads: "0",
+            gpuUploadsThread: "rendering-thread",
         });
     }
 
-    #updateDebugOverlay(chunks, rendererState, playerState) {
+    #updateDebugOverlay() {
         if (!this.#debugVisible) return;
         this.#debugOverlay.textContent = [
-            "CHUNK / SPAWN DEBUG",
-            `Player chunk: ${chunks.playerChunk.key()}`,
-            `Position: ${formatPosition(playerState.position)}`,
-            `Queued: ${chunks.queued}`,
-            `Meshed: ${chunks.meshed}`,
-            `Visible: ${chunks.visible}`,
-            `Draw calls: ${rendererState.drawCalls}`,
-            `Mode: ${chunks.mode}`,
-            `Respawns: ${playerState.respawnCount}`,
-            `Below Y=0: ${playerState.belowWorld}`,
-            "F3 overlay · H mode · hold R respawn",
+            "PHASE 11 DIAGNOSTICS",
+            `Player chunk: ${this.#chunkState.playerChunk.key()}`,
+            `Position: ${formatPositionXYZ(this.#playerState.x, this.#playerState.y, this.#playerState.z)}`,
+            `Queued / visible: ${this.#chunkState.queued} / ${this.#chunkState.visible}`,
+            `Drawn / culled: ${this.#rendererState.drawCalls} / ${this.#rendererState.frustumCulledChunks}`,
+            `Triangles: ${this.#rendererState.renderedTriangles} rendered`,
+            `Frame avg / peak: ${this.#diagnosticsState.averageFrameMs.toFixed(2)} / ${this.#diagnosticsState.peakFrameMs.toFixed(2)} ms`,
+            `Mesh avg: ${this.#diagnosticsState.averageChunkMeshMs.toFixed(3)} ms`,
+            `GPU mesh memory: ${(this.#diagnosticsState.chunkMeshBytes / 1048576).toFixed(2)} MiB`,
+            `Mode: ${this.#chunkState.mode}`,
+            `Respawns: ${this.#playerState.respawnCount}`,
+            "F3 diagnostics · H loading · hold R respawn",
         ].join("\n");
     }
 
@@ -344,17 +413,44 @@ class BrowserGame {
         }
     }
 
+    #geometryWasDrawn() {
+        const width = Math.min(this.#canvas.width, 512);
+        const height = Math.min(this.#canvas.height, 512);
+        if (!this.#verificationPixels || width !== this.#verificationWidth || height !== this.#verificationHeight) {
+            this.#verificationWidth = width;
+            this.#verificationHeight = height;
+            this.#verificationPixels = new Uint8Array(width * height * 4);
+        }
+        this.#gl.readPixels(
+            Math.floor((this.#canvas.width - width) / 2),
+            Math.floor((this.#canvas.height - height) / 2),
+            width,
+            height,
+            this.#gl.RGBA,
+            this.#gl.UNSIGNED_BYTE,
+            this.#verificationPixels,
+        );
+        for (let index = 0; index < this.#verificationPixels.length; index += 4) {
+            if (this.#verificationPixels[index] !== 127
+                || this.#verificationPixels[index + 1] !== 204
+                || this.#verificationPixels[index + 2] !== 255) return true;
+        }
+        return false;
+    }
+
     #installListeners() {
         this.#listen(window, "keydown", event => {
             if (event.code === "F3") {
                 event.preventDefault();
                 this.#debugVisible = !this.#debugVisible;
                 this.#debugOverlay.hidden = !this.#debugVisible;
+                this.#metadataCountdown = 0;
                 return;
             }
             if (event.code === "KeyH" && !event.repeat) {
                 event.preventDefault();
                 console.info(`Chunk processing mode changed to ${this.#chunkManager.toggleMode()}.`);
+                this.#metadataCountdown = 0;
                 return;
             }
             if (event.code !== "Escape" || document.pointerLockElement === this.#canvas) return;
@@ -364,7 +460,9 @@ class BrowserGame {
         this.#listen(document, "visibilitychange", () => {
             if (!document.hidden && this.#running) {
                 this.#player.resetInput();
-                this.#timer.reset(performance.now());
+                const timestamp = performance.now();
+                this.#timer.reset(timestamp);
+                this.#diagnostics.resetFrameClock(timestamp);
             }
         });
         this.#listen(this.#canvas, "webglcontextlost", event => {
@@ -452,26 +550,11 @@ function measureTerrainRange(generator) {
 }
 
 function formatPosition(position) {
-    return position.map(value => Number(value).toFixed(3)).join(",");
+    return formatPositionXYZ(position[0], position[1], position[2]);
 }
 
-function geometryWasDrawn(gl, canvas) {
-    const width = Math.min(canvas.width, 512);
-    const height = Math.min(canvas.height, 512);
-    const pixels = new Uint8Array(width * height * 4);
-    gl.readPixels(
-        Math.floor((canvas.width - width) / 2),
-        Math.floor((canvas.height - height) / 2),
-        width,
-        height,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        pixels,
-    );
-    for (let index = 0; index < pixels.length; index += 4) {
-        if (pixels[index] !== 127 || pixels[index + 1] !== 204 || pixels[index + 2] !== 255) return true;
-    }
-    return false;
+function formatPositionXYZ(x, y, z) {
+    return `${Number(x).toFixed(3)},${Number(y).toFixed(3)},${Number(z).toFixed(3)}`;
 }
 
 function showStartupFailure(status, failure) {
