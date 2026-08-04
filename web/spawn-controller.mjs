@@ -62,6 +62,11 @@ export class HistoricalSpawnController {
         return spawn;
     }
 
+    updateHeld(playerBody, held) {
+        if (typeof held !== "boolean") throw new TypeError("held must be boolean");
+        return held ? this.respawnPlayer(playerBody) : null;
+    }
+
     respawnPlayer(playerBody) {
         if (!playerBody || typeof playerBody.respawn !== "function") {
             throw new TypeError("respawnPlayer requires a player body with respawn(position)");
