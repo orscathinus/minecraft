@@ -1,146 +1,193 @@
 # Cave Game Tech Test Recreation
 
-A small, historically inspired recreation targeting the technical scope of the May 13, 2009 **Cave Game Tech Test**.
+A small, independently developed recreation of the technical scope documented for the May 13, 2009 **Cave game tech test**.
 
-This is an independent educational recreation. It is not affiliated with Mojang or Microsoft, and it does not include copyrighted Minecraft textures, sounds, source code, or other assets.
+This project is not affiliated with Mojang, Microsoft, or Markus Persson. It contains no copied Minecraft source code, textures, sounds, or other game assets.
 
 ## Play in a browser
 
 **https://orscathinus.github.io/minecraft/**
 
-The public implementation uses WebGL 2 and runs from GitHub Pages with no server-side runtime.
+The complete public implementation uses HTML, JavaScript modules, WebGL 2, and GitHub Pages. No server-side runtime or installation is required.
 
-## Current status: Phase 11 profiling and stabilization
+## Final scope
 
-Phase 11 keeps the complete Phase 10 feature set and corrects performance and resource-management problems without adding gameplay. The deterministic `256 × 64 × 256` world, caves, BRIGHT/DARK lighting, original textures, proximity loading, random Y=74 spawning, held-R respawning, and unrestricted void behavior remain unchanged.
+- Exact finite world: `256 × 64 × 256` blocks.
+- Exact horizontal chunk grid: `16 × 16` chunks, each `16 × 64 × 16` blocks.
+- Only three block states: `AIR`, `GRASS`, and `ROCK`.
+- Original 16×16 grass and rock textures; one material on all six faces.
+- Grass only on directly sunlit exposed terrain in Y `57..63`.
+- Deterministic restrained terrain and surface-opening caves that can reach Y `1`.
+- Uncarvable solid Y `0` layer.
+- First-person player with a `0.60 × 1.62 × 0.60` collision box and no rendered model.
+- Binary BRIGHT/DARK sunlight and heavy stepped black fog on DARK geometry.
+- Exact clear-sky color `#7FCCFF`.
+- Nearby-first incremental chunk meshing and upload.
+- Random X/Z spawning at exactly Y `74`.
+- Held-R respawning every fixed 60 Hz update.
+- Non-lethal, non-resetting void behavior.
+- No mining, placement, inventory, crafting, mobs, health, sound, saving, multiplayer, or later-game content.
 
-### Runtime stabilization
-
-- Player collision and movement use reusable typed arrays and scalar collision bounds instead of allocating AABBs and result objects every fixed update.
-- Projection and view matrices are reused.
-- Held-R respawning uses a no-allocation fixed-update path.
-- Chunk, player, renderer, spawn, and diagnostics snapshots are written into caller-owned reusable objects.
-- DOM diagnostics are refreshed every 15 frames rather than rebuilt every frame.
-- Unchanged chunks remain resident and are never rebuilt merely because the player moves.
-- Chunk queue epoch and revision checks continue preventing stale work from replacing a newer mesh.
-
-### Frustum culling
-
-Every uploaded chunk retains an AABB covering its `16 × 64 × 16` block region. Six camera-frustum planes are calculated once per rendered frame. Chunks entirely outside the camera view remain uploaded but issue no draw call and contribute no rendered triangles until the camera turns back toward them.
-
-No distance culling is used, so the complete finite-world appearance is preserved.
-
-### Resource ownership
-
-Each visible chunk owns one VAO, one vertex buffer, and one index buffer. Refresh upload follows a replace-then-dispose policy, and partial GPU construction failures dispose every resource that was successfully created. Page exit, application close, and WebGL context loss release chunk meshes, the atlas texture, shader program, listeners, observers, and scheduled animation frames.
-
-The browser target uses no worker thread. World generation, deterministic mesh construction, GPU upload, simulation, and rendering remain single-threaded; all WebGL calls occur on the rendering thread.
-
-## Processing modes
-
-Configuration is retained in `ChunkProcessingConfig`:
-
-- **Normal:** at most 2 chunk mesh/upload jobs every rendered frame.
-- **Historical:** 1 chunk job every 10 rendered frames.
-
-Historical mode remains available with `?loading=historical` or the `H` key. It uses frame budgets rather than `sleep`, so input and rendering remain responsive.
-
-## Diagnostics
-
-Press `F3`, or use `?debugChunks=1`, to show:
-
-- player chunk and position;
-- queued and visible chunks;
-- drawn and frustum-culled chunks;
-- rendered triangles;
-- average and peak frame time;
-- average chunk-mesh time;
-- current GPU mesh memory;
-- processing mode and respawn count.
-
-The browser also records generation, cave, sunlight, mesh, upload, frame, triangle, draw-call, pending-work, and memory counters as document data attributes for automated validation.
-
-## Benchmark command
-
-Run the deterministic diagnostic benchmark with Node.js 24:
-
-```bash
-node tools/benchmark-web.mjs
-node tools/benchmark-web.mjs --json
-node tools/benchmark-web.mjs --seed 42 --json
-```
-
-It records:
-
-- total world-generation duration;
-- terrain, cave, and sunlight durations;
-- average and maximum chunk-mesh duration;
-- total visible faces and triangles;
-- peak pending chunks;
-- exact block-array and sunlight-cache bytes;
-- generated chunk-mesh bytes;
-- whether hidden faces were omitted.
-
-Timing values depend on the machine, while deterministic counts remain stable for a fixed seed.
-
-## What appears on screen
-
-After terrain, caves, and sunlight are prepared, the player appears above a random X/Z block with feet at exactly Y=74. The spawn chunk is visible first, nearby chunks continue loading in proximity order, and the player falls toward the terrain.
-
-The scene looks the same as Phase 10, but turning the camera no longer renders chunks that are completely behind or outside the view. In normal mode the playable view appears quickly and surrounding chunks fill in without freezing controls. Historical mode still makes the nearest-first square expansion clearly visible.
-
-The exact `#7FCCFF` sky, crisp original `16 × 16` grass and rock textures, bright surface, dim fogged caves, collision, jumping, held-R teleports, and continuing void fall all remain active. No modern visual effects were added.
+The authoritative requirements are in [`SPEC.md`](SPEC.md). Reconstruction choices are separated into [`ASSUMPTIONS.md`](ASSUMPTIONS.md), and unresolved historical differences are listed in [`KNOWN_DEVIATIONS.md`](KNOWN_DEVIATIONS.md).
 
 ## Controls
 
-- Click: capture the mouse.
-- Mouse: look around.
-- `W` / `S`: move forward / backward.
-- `A` / `D`: strafe.
-- `Space`: jump while grounded.
-- Hold `R`: respawn every fixed game update.
-- `F3`: toggle diagnostics.
-- `H`: switch normal and historical chunk loading.
-- `Escape`: release the mouse; press again while released to stop and release resources.
+| Input | Action |
+|---|---|
+| Click | Capture the mouse |
+| Mouse | Look around |
+| W / S | Move forward / backward |
+| A / D | Strafe left / right |
+| Space | Jump while grounded |
+| Hold R | Select a new random X/Z and respawn at Y=74 every fixed update |
+| F3 | Toggle diagnostics |
+| H | Toggle normal and historical chunk-loading pace |
+| Escape | Release mouse; press again while released to stop and dispose resources |
 
-## Original texture ownership
+There are no controls for breaking or placing blocks.
 
-The `16 × 16` grass and rock textures were designed from scratch for this repository as deterministic procedural pixel art. They were not copied, sampled, traced, recolored, or derived from Minecraft, Mojang, RubyDung, or another game.
+## What appears on screen
 
-`web/block-textures.mjs` is the authoritative pixel source. The atlas uses replicated one-pixel gutters, `NEAREST` filtering, `CLAMP_TO_EDGE`, and no mipmaps.
+After deterministic terrain, cave, and sunlight preparation, the player starts above a random block column with feet at Y `74`. The spawn chunk appears first, and nearby chunks spread outward before distant chunks. Outdoor terrain is bright; covered caves are uniformly dim and become blacker with distance. The player may walk beyond the finite map or fall below Y `0` without damage, death, or automatic respawn. Holding R remains the manual way to return above the map.
+
+Normal mode uses a practical two-chunks-per-frame mesh budget. Historical-loading mode processes one chunk every ten frames so the documented proximity order remains visible:
+
+```text
+https://orscathinus.github.io/minecraft/?loading=historical&debugChunks=1
+```
+
+## Screenshots
+
+| Scene | File |
+|---|---|
+| Surface | [`docs/screenshots/surface.png`](docs/screenshots/surface.png) |
+| Cave | [`docs/screenshots/cave.png`](docs/screenshots/cave.png) |
+| Historical chunk loading | [`docs/screenshots/chunk-loading.png`](docs/screenshots/chunk-loading.png) |
+| Void | [`docs/screenshots/void.png`](docs/screenshots/void.png) |
+
+These images are captured from the actual WebGL 2 application with deterministic test seeds and ordinary runtime controls.
+
+## Historical sources and evidence policy
+
+The original executable was not publicly released, so the reconstruction uses surviving video, contemporaneous posts/logs as summarized by historical references, and the requirements preserved in this repository.
+
+Primary reference links:
+
+- [Archived “Cave Game tech demo!” post from The Word of Notch, May 13, 2009](https://blog.omniarchive.uk/post/107315028/cave-game-tech-demo/)
+- [Minecraft Wiki: Java Edition pre-Classic rd-131655 / Cave game tech test](https://minecraft.wiki/w/Java_Edition_pre-Classic_rd-131655)
+- [`SPEC.md`](SPEC.md), the project’s frozen engineering interpretation of the evidence
+
+The historical references support broad facts such as the `256 × 64 × 256` map, 16×16 horizontal chunks, slow proximity-ordered chunk updates, the three early materials, top-layer lit grass, non-interactive blocks, R respawning, caves, and the void. They do not reveal all algorithms or constants. Unknown details are explicitly labeled approximations rather than presented as recovered facts.
+
+## Asset ownership
+
+The grass and rock textures were designed from scratch for this repository as deterministic procedural pixel art. They were not copied, traced, sampled, recolored, or derived from Minecraft, Mojang, RubyDung, or another game.
+
+- Authoritative source: `web/block-textures.mjs`
+- Resolution: 16×16 RGBA per material
+- Sampling: nearest-neighbor
+- Mipmaps: disabled
+- Atlas protection: replicated one-pixel gutters
+- Material rule: one texture on every face of each block
+
+The retained preview tool is:
+
+```bash
+node tools/generate-block-textures.mjs
+```
 
 ## Browser development
 
+Requirements: Node.js 24 for the complete verification toolchain, Python 3 or another static server, and a WebGL 2 browser.
+
 ```bash
-node --test web/test/*.test.mjs
+node tools/fidelity-audit.mjs
 node tools/benchmark-web.mjs --json
+node --test web/test/*.test.mjs
 python3 -m http.server 8000
 ```
 
 Open `http://localhost:8000/` or `http://localhost:8000/web/`.
 
-## Phase 11 structure
+## Desktop Gradle reference and distribution
 
-- `web/performance-diagnostics.mjs`: bounded frame history and reusable runtime diagnostics.
-- `web/benchmark.mjs`: deterministic world and mesh benchmark core.
-- `tools/benchmark-web.mjs`: human-readable or JSON diagnostics command.
-- `web/renderer.mjs`: frustum culling, cached counters, upload timings, and leak-safe GPU ownership.
-- `web/chunk-manager.mjs`: mesh timings, peak pending work, explicit budgets, and no-result hot path.
-- `web/player-physics.mjs`: scalar allocation-free fixed-update movement and reusable view matrix.
-- `web/first-person-player.mjs`: reusable input state and snapshots.
-- `web/test/performance-diagnostics.test.mjs`: diagnostics-memory and frustum tests.
-- `web/test/browser-smoke.sh`: real Chromium validation for both GitHub Pages layouts and historical mode.
+The Java 21/LWJGL 3/OpenGL desktop application remains a small reference shell. The Gradle distribution packages that desktop launcher together with the complete browser build, documentation, reports, and screenshots.
 
-## Desktop reference build
+### Windows
 
-The Java/LWJGL desktop target remains a Phase 1 reference shell. The complete public implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
+1. Install a 64-bit JDK 21 and verify `java -version`.
+2. Open PowerShell in the repository.
+3. Run:
 
-```bash
-./gradlew build
-./gradlew test
-./gradlew run
+```powershell
+.\gradlew.bat clean build
+.\gradlew.bat finalPackage
 ```
 
-## Scope boundary
+The ZIP and TAR packages appear in `build/distributions/`. A platform-native Windows LWJGL runtime is selected during the Windows build.
 
-Phase 11 does not add health, damage, death screens, lives, checkpoints, safe-spawn searching, cooldowns, infinite terrain, chunk unloading, new blocks, block interaction, inventory, enemies, sound, water, lava, modern lighting, shadows, or persistence.
+### macOS
+
+Install JDK 21, then run:
+
+```bash
+./gradlew clean build
+./gradlew finalPackage
+```
+
+Gradle selects Intel or Apple-silicon LWJGL natives from the current machine. The generated launcher includes `-XstartOnFirstThread` as required by GLFW on macOS.
+
+### Linux
+
+Install JDK 21 and the system libraries needed by GLFW/OpenGL, then run:
+
+```bash
+./gradlew clean build
+./gradlew finalPackage
+```
+
+For a headless CI smoke test, use Xvfb:
+
+```bash
+xvfb-run -a ./gradlew --no-daemon smokeTest
+```
+
+### Running the installed desktop reference
+
+After `./gradlew installDist`:
+
+```bash
+./build/install/cave-game-tech-test-recreation/bin/cave-game-tech-test-recreation
+```
+
+On Windows, use the corresponding `.bat` launcher.
+
+## Final verification
+
+```bash
+node tools/fidelity-audit.mjs
+node tools/benchmark-web.mjs --json
+node --test web/test/*.test.mjs
+./gradlew --no-daemon clean build
+./gradlew --no-daemon distZip distTar
+bash web/test/browser-smoke.sh
+```
+
+The final verification matrix and scope audit are recorded in [`FINAL_TEST_REPORT.md`](FINAL_TEST_REPORT.md).
+
+## Repository map
+
+- `web/`: complete GitHub Pages/WebGL 2 application
+- `src/`: Java/LWJGL reference target
+- `tools/fidelity-audit.mjs`: repository-wide final-scope audit
+- `tools/benchmark-web.mjs`: deterministic performance benchmark
+- `tools/capture-screenshots.mjs`: deterministic real-browser screenshot capture
+- `docs/screenshots/`: final surface, cave, loading, and void captures
+- `SPEC.md`: required behavior and prohibited scope
+- `ASSUMPTIONS.md`: implementation approximations
+- `KNOWN_DEVIATIONS.md`: known differences from the unreleased historical build
+- `FINAL_TEST_REPORT.md`: final validation report
+
+## License and trademark note
+
+This repository is an independent educational project. “Minecraft” and related marks belong to their respective owners. The project name describes the historical subject of study and does not imply endorsement.
