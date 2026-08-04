@@ -1,5 +1,6 @@
 import { ATLAS_HEIGHT, ATLAS_WIDTH, createAtlasPixels } from "./atlas.mjs";
 import { CHUNK_VERTEX_FLOATS } from "./chunk-mesh.mjs";
+import { configurePixelTextureSampling } from "./pixel-texture-sampling.mjs";
 
 const ERROR_NAMES = new Map([
     [0x0500, "INVALID_ENUM"],
@@ -148,10 +149,7 @@ function createAtlasTexture(gl) {
         gl.UNSIGNED_BYTE,
         createAtlasPixels(),
     );
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    configurePixelTextureSampling(gl);
     gl.bindTexture(gl.TEXTURE_2D, null);
     return texture;
 }
