@@ -41,3 +41,6 @@ jobs:
           node --check web/app.mjs
           node --check web/fixed-step-timer.mjs
           node --test web/test/*.test.mjs
+
+      - name: Smoke-test browser WebGL 2 application
+        run: bash web/test/browser-smoke.sh
