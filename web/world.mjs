@@ -6,6 +6,7 @@ import { isFiniteChunkCoordinate, isFiniteWorldCoordinate } from "./world-config
 
 export class World {
     #chunks = new Map();
+    #dirtyChunks = new Map();
 
     addChunk(chunk) {
         if (!(chunk instanceof Chunk)) throw new TypeError("World.addChunk requires a Chunk");
@@ -41,8 +42,43 @@ export class World {
         const chunk = this.getChunk(globalToChunkPosition(globalX, globalZ));
         if (!chunk) return false;
         const local = globalToLocalPosition(globalX, globalZ);
+        if (chunk.getBlock(local.x, y, local.z) === blockType) return false;
         chunk.setBlock(local.x, y, local.z, blockType);
+        this.#markBlockAndBoundaryNeighborsDirty(globalX, globalZ);
         return true;
+    }
+
+    markChunkDirty(positionOrX, z = undefined) {
+        const position = positionOrX instanceof ChunkPosition
+            ? positionOrX
+            : new ChunkPosition(positionOrX, z);
+        if (!isFiniteChunkCoordinate(position.x, position.z) || !this.hasChunk(position)) return false;
+        this.#dirtyChunks.set(position.key(), position);
+        return true;
+    }
+
+    dirtyChunkPositions() {
+        return Object.freeze([...this.#dirtyChunks.values()]);
+    }
+
+    consumeDirtyChunkPositions() {
+        const positions = this.dirtyChunkPositions();
+        this.#dirtyChunks.clear();
+        return positions;
+    }
+
+    clearDirtyChunks() {
+        this.#dirtyChunks.clear();
+    }
+
+    #markBlockAndBoundaryNeighborsDirty(globalX, globalZ) {
+        const position = globalToChunkPosition(globalX, globalZ);
+        const local = globalToLocalPosition(globalX, globalZ);
+        this.markChunkDirty(position);
+        if (local.x === 0) this.markChunkDirty(position.x - 1, position.z);
+        if (local.x === 15) this.markChunkDirty(position.x + 1, position.z);
+        if (local.z === 0) this.markChunkDirty(position.x, position.z - 1);
+        if (local.z === 15) this.markChunkDirty(position.x, position.z + 1);
     }
 
     chunks() { return Object.freeze([...this.#chunks.values()]); }
