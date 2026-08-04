@@ -4,15 +4,28 @@ const MAX_PITCH = 89 * Math.PI / 180;
 
 export class DebugCamera {
     #canvas;
-    #position = [8, 6.5, 22];
-    #yaw = 0;
-    #pitch = -0.24;
+    #position;
+    #yaw;
+    #pitch;
+    #moveSpeed;
+    #fastMoveSpeed;
     #keys = new Set();
     #listeners = [];
 
-    constructor(canvas) {
+    constructor(canvas, {
+        position = [128, 74, 270],
+        yaw = 0,
+        pitch = -0.12,
+        moveSpeed = 18,
+        fastMoveSpeed = 48,
+    } = {}) {
         if (!(canvas instanceof HTMLCanvasElement)) throw new TypeError("DebugCamera requires a canvas");
         this.#canvas = canvas;
+        this.#position = [...position];
+        this.#yaw = yaw;
+        this.#pitch = pitch;
+        this.#moveSpeed = moveSpeed;
+        this.#fastMoveSpeed = fastMoveSpeed;
         this.#installListeners();
     }
 
@@ -27,7 +40,9 @@ export class DebugCamera {
         const forward = this.forwardVector();
         const horizontalForward = normalize([forward[0], 0, forward[2]]);
         const right = normalize(cross(horizontalForward, [0, 1, 0]));
-        const speed = (this.#keys.has("ShiftLeft") || this.#keys.has("ShiftRight")) ? 8 : 4;
+        const speed = this.#keys.has("ShiftLeft") || this.#keys.has("ShiftRight")
+            ? this.#fastMoveSpeed
+            : this.#moveSpeed;
         let movement = [0, 0, 0];
         if (this.#keys.has("KeyW")) movement = addVectors(movement, horizontalForward);
         if (this.#keys.has("KeyS")) movement = addVectors(movement, scaleVector(horizontalForward, -1));
@@ -37,10 +52,7 @@ export class DebugCamera {
         if (this.#keys.has("KeyQ")) movement[1] -= 1;
         const length = Math.hypot(...movement);
         if (length > 0) {
-            this.#position = addVectors(
-                this.#position,
-                scaleVector(movement, speed * stepSeconds / length),
-            );
+            this.#position = addVectors(this.#position, scaleVector(movement, speed * stepSeconds / length));
         }
     }
 
