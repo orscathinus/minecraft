@@ -7,6 +7,7 @@ ROOT_DOM_OUTPUT="$(mktemp)"
 WEB_DOM_OUTPUT="$(mktemp)"
 HISTORICAL_DOM_OUTPUT="$(mktemp)"
 SERVER_LOG="$(mktemp)"
+SPAWN_SEED="424242"
 
 cleanup() {
     if [[ -n "${SERVER_PID:-}" ]]; then kill "${SERVER_PID}" 2>/dev/null || true; fi
@@ -23,6 +24,9 @@ done
 for path in \
     index.html \
     web/index.html \
+    web/spawn-controller.mjs \
+    web/player-physics.mjs \
+    web/first-person-player.mjs \
     web/chunk-manager.mjs \
     web/chunk-mesher.mjs \
     web/renderer.mjs \
@@ -79,10 +83,10 @@ run_chromium() {
 
 assert_shared_state() {
     local output="$1"
-    assert_dom 'Cave Game Tech Test Recreation · Phase 9' "${output}"
+    assert_dom 'Cave Game Tech Test Recreation · Phase 10' "${output}"
     assert_dom 'data-app-state="running"' "${output}"
     assert_dom 'data-webgl="2"' "${output}"
-    assert_dom 'data-phase="9"' "${output}"
+    assert_dom 'data-phase="10"' "${output}"
     assert_dom 'data-texture-phase="7"' "${output}"
     assert_dom 'data-texture-version="phase-7-original-v1"' "${output}"
     assert_dom 'data-texture-size="16"' "${output}"
@@ -125,18 +129,37 @@ assert_shared_state() {
     assert_dom 'data-cave-surface-openings="81"' "${output}"
     assert_dom 'data-cave-affected-chunks="33"' "${output}"
     assert_dom 'data-cave-bottom-solid="true"' "${output}"
+    assert_dom 'data-spawn-model="historical-random-xz-y74"' "${output}"
+    assert_dom 'data-spawn-y="74"' "${output}"
+    assert_dom 'data-spawn-range="0.5-255.5"' "${output}"
+    assert_dom 'data-spawn-random-source="fixed-debug-seed"' "${output}"
+    assert_dom "data-spawn-random-seed=\"${SPAWN_SEED}\"" "${output}"
+    assert_dom "data-spawn-debug-seed=\"${SPAWN_SEED}\"" "${output}"
+    assert_dom 'data-initial-spawn="[0-9][0-9]*\.500,74\.000,[0-9][0-9]*\.500"' "${output}"
+    assert_dom 'data-total-spawns="1"' "${output}"
+    assert_dom 'data-respawn-count="0"' "${output}"
+    assert_dom 'data-respawn-held="false"' "${output}"
+    assert_dom 'data-respawn-per-fixed-update="true"' "${output}"
+    assert_dom 'data-automatic-void-respawn="false"' "${output}"
+    assert_dom 'data-lower-y-clamp="false"' "${output}"
+    assert_dom 'data-horizontal-world-clamp="false"' "${output}"
+    assert_dom 'data-void-safety-limit="1000000000000"' "${output}"
+    assert_dom 'data-void-safety-rebase="1000000000"' "${output}"
+    assert_dom 'data-void-safety-rebases="0"' "${output}"
+    assert_dom 'data-player-velocity-x="' "${output}"
+    assert_dom 'data-player-velocity-y="' "${output}"
+    assert_dom 'data-player-velocity-z="' "${output}"
     assert_dom 'data-player-width="0.60"' "${output}"
     assert_dom 'data-player-height="1.62"' "${output}"
     assert_dom 'data-player-eye-height="1.54"' "${output}"
-    assert_dom 'data-player-grounded="true"' "${output}"
     assert_dom 'data-player-model="none"' "${output}"
-    assert_dom 'data-controls="wasd-space-mouse-f3-h"' "${output}"
+    assert_dom 'data-controls="wasd-space-r-mouse-f3-h"' "${output}"
 
     local player_chunk first_chunk
     player_chunk="$(attribute_value player-chunk "${output}")"
     first_chunk="$(attribute_value first-visible-chunk "${output}")"
     if [[ -z "${player_chunk}" || "${player_chunk}" != "${first_chunk}" ]]; then
-        echo "Nearest chunk was not made visible first: player=${player_chunk}, first=${first_chunk}" >&2
+        echo "Spawn chunk was not made visible first: player=${player_chunk}, first=${first_chunk}" >&2
         cat "${output}" >&2
         exit 1
     fi
@@ -156,19 +179,19 @@ assert_historical_mode() {
     assert_dom 'data-chunk-frame-interval="10"' "${output}"
     assert_dom 'data-chunks-queued="[1-9][0-9]*"' "${output}"
     assert_dom 'data-chunk-loading-complete="false"' "${output}"
-    assert_dom 'CHUNK PROCESSING' "${output}"
+    assert_dom 'CHUNK / SPAWN DEBUG' "${output}"
     assert_dom 'Mode: historical' "${output}"
 }
 
-run_chromium "${BASE_URL}/" "${ROOT_DOM_OUTPUT}"
+run_chromium "${BASE_URL}/?spawnSeed=${SPAWN_SEED}" "${ROOT_DOM_OUTPUT}"
 assert_shared_state "${ROOT_DOM_OUTPUT}"
 assert_normal_mode "${ROOT_DOM_OUTPUT}"
 
-run_chromium "${BASE_URL}/web/" "${WEB_DOM_OUTPUT}"
+run_chromium "${BASE_URL}/web/?spawnSeed=${SPAWN_SEED}" "${WEB_DOM_OUTPUT}"
 assert_shared_state "${WEB_DOM_OUTPUT}"
 assert_normal_mode "${WEB_DOM_OUTPUT}"
 
-run_chromium "${BASE_URL}/?loading=historical&debugChunks=1" "${HISTORICAL_DOM_OUTPUT}"
+run_chromium "${BASE_URL}/?spawnSeed=${SPAWN_SEED}&loading=historical&debugChunks=1" "${HISTORICAL_DOM_OUTPUT}"
 assert_shared_state "${HISTORICAL_DOM_OUTPUT}"
 assert_historical_mode "${HISTORICAL_DOM_OUTPUT}"
 
@@ -179,4 +202,4 @@ if (( normal_visible <= historical_visible )); then
     exit 1
 fi
 
-echo "Phase 9 normal and historical proximity chunk smoke tests passed."
+echo "Phase 10 spawn, void-policy, and proximity chunk smoke tests passed."
