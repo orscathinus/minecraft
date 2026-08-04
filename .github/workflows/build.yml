@@ -35,13 +35,18 @@ jobs:
           node --check tools/benchmark-web.mjs
           node --check tools/fidelity-audit.mjs
           node --check tools/capture-screenshots.mjs
+          node --check tools/capture-screenshots-impl.mjs
           node --test web/test/*.test.mjs
       - name: Run final fidelity and scope audit
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p build/diagnostics
           node tools/fidelity-audit.mjs --json | tee build/diagnostics/phase12-fidelity-audit.json
       - name: Record final deterministic benchmark
+        shell: bash
         run: |
+          set -euo pipefail
           node tools/benchmark-web.mjs --json | tee build/diagnostics/phase12-benchmark.json
       - name: Smoke-test browser WebGL 2 application
         run: bash web/test/browser-smoke.sh
