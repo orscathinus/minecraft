@@ -1,6 +1,5 @@
-import { createAabb, intersectsAabb } from "./aabb.mjs";
+import { createAabb } from "./aabb.mjs";
 import { isOpaqueBlock } from "./block-type.mjs";
-import { addVectors, lookAtMatrix, normalize } from "./math.mjs";
 
 const MAX_PITCH = 89 * Math.PI / 180;
 const MAX_COLLISION_STEP = 0.25;
@@ -36,42 +35,22 @@ export function playerAabb(position, config = PlayerConfig) {
 export function movePlayerAabb(world, position, displacement, config = PlayerConfig) {
     requirePosition(position);
     requirePosition(displacement, "displacement");
-    const steps = Math.max(1, Math.ceil(Math.max(...displacement.map(Math.abs)) / MAX_COLLISION_STEP));
-    const step = displacement.map(value => value / steps);
-    let current = [...position];
-    let hitX = false;
-    let hitZ = false;
-    let hitFloor = false;
-    let hitCeiling = false;
-
-    for (let index = 0; index < steps; index += 1) {
-        const xResult = moveAxis(world, current, step[0], 0, config);
-        current = xResult.position;
-        hitX ||= xResult.collided;
-
-        const zResult = moveAxis(world, current, step[2], 2, config);
-        current = zResult.position;
-        hitZ ||= zResult.collided;
-
-        const yResult = moveAxis(world, current, step[1], 1, config);
-        current = yResult.position;
-        if (yResult.collided && step[1] < 0) hitFloor = true;
-        if (yResult.collided && step[1] > 0) hitCeiling = true;
-    }
-
+    const current = new Float64Array(position);
+    const result = createMovementResult();
+    movePlayerInPlace(world, current, displacement[0], displacement[1], displacement[2], config, result);
     return Object.freeze({
-        position: Object.freeze(current),
-        hitX,
-        hitZ,
-        hitFloor,
-        hitCeiling,
-        grounded: hitFloor,
+        position: Object.freeze(Array.from(current)),
+        hitX: result.hitX,
+        hitZ: result.hitZ,
+        hitFloor: result.hitFloor,
+        hitCeiling: result.hitCeiling,
+        grounded: result.grounded,
     });
 }
 
 export class PlayerPhysics {
     #world;
-    #position;
+    #position = new Float64Array(3);
     #velocityX = 0;
     #velocityY = 0;
     #velocityZ = 0;
@@ -79,23 +58,25 @@ export class PlayerPhysics {
     #pitch;
     #grounded = false;
     #voidSafetyRebases = 0;
+    #movement = createMovementResult();
+    #viewMatrix = new Float32Array(16);
 
     constructor(world, {
         position = [128.5, 64, 128.5],
         yaw = 0,
         pitch = -0.12,
     } = {}) {
-        if (!world || typeof world.getBlock !== "function") {
-            throw new TypeError("PlayerPhysics requires a voxel world");
-        }
+        if (!world || typeof world.getBlock !== "function") throw new TypeError("PlayerPhysics requires a voxel world");
         requirePosition(position);
         this.#world = world;
-        this.#position = [...position];
+        this.#position[0] = position[0];
+        this.#position[1] = position[1];
+        this.#position[2] = position[2];
         this.#yaw = yaw;
         this.#pitch = clamp(pitch, -MAX_PITCH, MAX_PITCH);
     }
 
-    update(stepSeconds, input = {}) {
+    advance(stepSeconds, input = EMPTY_INPUT) {
         if (!Number.isFinite(stepSeconds) || stepSeconds <= 0 || stepSeconds > 0.25) {
             throw new RangeError("stepSeconds must be in (0, 0.25]");
         }
@@ -122,78 +103,117 @@ export class PlayerPhysics {
             this.#velocityY = PlayerConfig.jumpSpeed;
             this.#grounded = false;
         }
-        this.#velocityY = Math.max(
-            this.#velocityY - PlayerConfig.gravity * stepSeconds,
-            -PlayerConfig.terminalVelocity,
-        );
+        this.#velocityY = Math.max(this.#velocityY - PlayerConfig.gravity * stepSeconds, -PlayerConfig.terminalVelocity);
 
-        const movement = movePlayerAabb(this.#world, this.#position, [
+        movePlayerInPlace(
+            this.#world,
+            this.#position,
             this.#velocityX * stepSeconds,
             this.#velocityY * stepSeconds,
             this.#velocityZ * stepSeconds,
-        ]);
-        this.#position = [...movement.position];
-        if (movement.hitX) this.#velocityX = 0;
-        if (movement.hitZ) this.#velocityZ = 0;
-        if (movement.hitFloor || movement.hitCeiling) this.#velocityY = 0;
-        this.#grounded = movement.grounded;
+            PlayerConfig,
+            this.#movement,
+        );
+        if (this.#movement.hitX) this.#velocityX = 0;
+        if (this.#movement.hitZ) this.#velocityZ = 0;
+        if (this.#movement.hitFloor || this.#movement.hitCeiling) this.#velocityY = 0;
+        this.#grounded = this.#movement.grounded;
         this.#applyExtremeCoordinateSafeguard();
+    }
+
+    update(stepSeconds, input = EMPTY_INPUT) {
+        this.advance(stepSeconds, input);
         return this.snapshot();
     }
 
-    respawn(position) {
-        requirePosition(position, "respawn position");
-        this.#position = [...position];
+    respawnXYZ(x, y, z) {
+        if (![x, y, z].every(Number.isFinite)) throw new TypeError("respawn coordinates must be finite");
+        this.#position[0] = x;
+        this.#position[1] = y;
+        this.#position[2] = z;
         this.#velocityX = 0;
         this.#velocityY = 0;
         this.#velocityZ = 0;
         this.#grounded = false;
+    }
+
+    respawn(position) {
+        requirePosition(position, "respawn position");
+        this.respawnXYZ(position[0], position[1], position[2]);
         return this.snapshot();
     }
 
     rotate(deltaYaw, deltaPitch) {
-        if (!Number.isFinite(deltaYaw) || !Number.isFinite(deltaPitch)) {
-            throw new TypeError("Look deltas must be finite");
-        }
+        if (!Number.isFinite(deltaYaw) || !Number.isFinite(deltaPitch)) throw new TypeError("Look deltas must be finite");
         this.#yaw += deltaYaw;
         this.#pitch = clamp(this.#pitch + deltaPitch, -MAX_PITCH, MAX_PITCH);
     }
 
     viewMatrix() {
-        const eye = [
-            this.#position[0],
-            this.#position[1] + PlayerConfig.eyeHeight,
-            this.#position[2],
-        ];
-        return lookAtMatrix(eye, addVectors(eye, this.forwardVector()));
+        const eyeX = this.#position[0];
+        const eyeY = this.#position[1] + PlayerConfig.eyeHeight;
+        const eyeZ = this.#position[2];
+        const sinYaw = Math.sin(this.#yaw);
+        const cosYaw = Math.cos(this.#yaw);
+        const sinPitch = Math.sin(this.#pitch);
+        const cosPitch = Math.cos(this.#pitch);
+        const forwardX = sinYaw * cosPitch;
+        const forwardY = sinPitch;
+        const forwardZ = -cosYaw * cosPitch;
+        const sideX = cosYaw;
+        const sideY = 0;
+        const sideZ = sinYaw;
+        const upX = -sinYaw * sinPitch;
+        const upY = cosPitch;
+        const upZ = cosYaw * sinPitch;
+        const result = this.#viewMatrix;
+        result[0] = sideX; result[1] = upX; result[2] = -forwardX; result[3] = 0;
+        result[4] = sideY; result[5] = upY; result[6] = -forwardY; result[7] = 0;
+        result[8] = sideZ; result[9] = upZ; result[10] = -forwardZ; result[11] = 0;
+        result[12] = -(sideX * eyeX + sideY * eyeY + sideZ * eyeZ);
+        result[13] = -(upX * eyeX + upY * eyeY + upZ * eyeZ);
+        result[14] = forwardX * eyeX + forwardY * eyeY + forwardZ * eyeZ;
+        result[15] = 1;
+        return result;
     }
 
     forwardVector() {
         const cosinePitch = Math.cos(this.#pitch);
-        return normalize([
+        return Object.freeze([
             Math.sin(this.#yaw) * cosinePitch,
             Math.sin(this.#pitch),
             -Math.cos(this.#yaw) * cosinePitch,
         ]);
     }
 
+    writeSnapshot(target) {
+        if (!target || typeof target !== "object") throw new TypeError("player snapshot target must be an object");
+        target.x = this.#position[0];
+        target.y = this.#position[1];
+        target.z = this.#position[2];
+        target.velocityX = this.#velocityX;
+        target.velocityY = this.#velocityY;
+        target.velocityZ = this.#velocityZ;
+        target.grounded = this.#grounded;
+        target.yaw = this.#yaw;
+        target.pitch = this.#pitch;
+        target.belowWorld = this.#position[1] < 0;
+        target.voidSafetyRebases = this.#voidSafetyRebases;
+        return target;
+    }
+
     snapshot() {
-        return Object.freeze({
-            position: Object.freeze([...this.#position]),
-            velocity: Object.freeze([this.#velocityX, this.#velocityY, this.#velocityZ]),
-            velocityX: this.#velocityX,
-            velocityY: this.#velocityY,
-            velocityZ: this.#velocityZ,
-            grounded: this.#grounded,
-            yaw: this.#yaw,
-            pitch: this.#pitch,
-            belowWorld: this.#position[1] < 0,
-            voidSafetyRebases: this.#voidSafetyRebases,
-        });
+        const state = this.writeSnapshot({});
+        state.position = Object.freeze([state.x, state.y, state.z]);
+        state.velocity = Object.freeze([state.velocityX, state.velocityY, state.velocityZ]);
+        return Object.freeze(state);
     }
 
     get grounded() { return this.#grounded; }
-    get position() { return Object.freeze([...this.#position]); }
+    get position() { return Object.freeze(Array.from(this.#position)); }
+    get x() { return this.#position[0]; }
+    get y() { return this.#position[1]; }
+    get z() { return this.#position[2]; }
 
     #applyExtremeCoordinateSafeguard() {
         let changed = false;
@@ -207,34 +227,67 @@ export class PlayerPhysics {
     }
 }
 
-function moveAxis(world, position, delta, axis, config) {
-    if (delta === 0) return { position: [...position], collided: false };
-    const proposed = [...position];
-    proposed[axis] += delta;
-    const bounds = playerAabb(proposed, config);
-    const minX = Math.floor(bounds.minX + 1e-7);
-    const maxX = Math.floor(bounds.maxX - 1e-7);
-    const minY = Math.floor(bounds.minY + 1e-7);
-    const maxY = Math.floor(bounds.maxY - 1e-7);
-    const minZ = Math.floor(bounds.minZ + 1e-7);
-    const maxZ = Math.floor(bounds.maxZ - 1e-7);
-    let resolved = proposed[axis];
+const EMPTY_INPUT = Object.freeze({
+    forward: false,
+    backward: false,
+    left: false,
+    right: false,
+    jumpPressed: false,
+});
+
+function createMovementResult() {
+    return { hitX: false, hitZ: false, hitFloor: false, hitCeiling: false, grounded: false };
+}
+
+function movePlayerInPlace(world, position, deltaX, deltaY, deltaZ, config, result) {
+    const maximumDelta = Math.max(Math.abs(deltaX), Math.abs(deltaY), Math.abs(deltaZ));
+    const steps = Math.max(1, Math.ceil(maximumDelta / MAX_COLLISION_STEP));
+    const stepX = deltaX / steps;
+    const stepY = deltaY / steps;
+    const stepZ = deltaZ / steps;
+    result.hitX = false;
+    result.hitZ = false;
+    result.hitFloor = false;
+    result.hitCeiling = false;
+
+    for (let index = 0; index < steps; index += 1) {
+        if (resolveAxisInPlace(world, position, stepX, 0, config)) result.hitX = true;
+        if (resolveAxisInPlace(world, position, stepZ, 2, config)) result.hitZ = true;
+        if (resolveAxisInPlace(world, position, stepY, 1, config)) {
+            if (stepY < 0) result.hitFloor = true;
+            if (stepY > 0) result.hitCeiling = true;
+        }
+    }
+    result.grounded = result.hitFloor;
+}
+
+function resolveAxisInPlace(world, position, delta, axis, config) {
+    if (delta === 0) return false;
+    const halfWidth = config.width / 2;
+    let proposedAxis = position[axis] + delta;
+    const centerX = axis === 0 ? proposedAxis : position[0];
+    const feetY = axis === 1 ? proposedAxis : position[1];
+    const centerZ = axis === 2 ? proposedAxis : position[2];
+    const minX = Math.floor(centerX - halfWidth + 1e-7);
+    const maxX = Math.floor(centerX + halfWidth - 1e-7);
+    const minY = Math.floor(feetY + 1e-7);
+    const maxY = Math.floor(feetY + config.height - 1e-7);
+    const minZ = Math.floor(centerZ - halfWidth + 1e-7);
+    const maxZ = Math.floor(centerZ + halfWidth - 1e-7);
     let collided = false;
 
     for (let y = minY; y <= maxY; y += 1) {
         for (let z = minZ; z <= maxZ; z += 1) {
             for (let x = minX; x <= maxX; x += 1) {
                 if (!isOpaqueBlock(world.getBlock(x, y, z))) continue;
-                const block = createAabb(x, y, z, x + 1, y + 1, z + 1);
-                if (!intersectsAabb(bounds, block)) continue;
                 collided = true;
                 const candidate = collisionLimit(axis, delta, x, y, z, config);
-                resolved = delta > 0 ? Math.min(resolved, candidate) : Math.max(resolved, candidate);
+                proposedAxis = delta > 0 ? Math.min(proposedAxis, candidate) : Math.max(proposedAxis, candidate);
             }
         }
     }
-    proposed[axis] = resolved;
-    return { position: proposed, collided };
+    position[axis] = proposedAxis;
+    return collided;
 }
 
 function collisionLimit(axis, delta, blockX, blockY, blockZ, config) {
@@ -244,7 +297,8 @@ function collisionLimit(axis, delta, blockX, blockY, blockZ, config) {
 }
 
 function requirePosition(position, name = "position") {
-    if (!Array.isArray(position) || position.length !== 3 || position.some(value => !Number.isFinite(value))) {
+    if ((!Array.isArray(position) && !(position instanceof Float64Array) && !(position instanceof Float32Array))
+        || position.length !== 3 || Array.from(position).some(value => !Number.isFinite(value))) {
         throw new TypeError(`${name} must contain three finite numbers`);
     }
 }
