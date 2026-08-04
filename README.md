@@ -10,50 +10,53 @@ This is an independent educational recreation. It is not affiliated with Mojang 
 
 The project supports GitHub Pages from `main` / repository root and through the GitHub Actions deployment of `web/`.
 
-## Current status: Phase 7 original block textures
+## Current status: Phase 8 BRIGHT / DARK lighting
 
-The browser build keeps the finite seeded world, primitive caves, and collision-enabled first-person player from earlier phases, but replaces the temporary block colors with final original low-resolution materials.
+The browser build keeps the finite seeded world, primitive caves, collision-enabled first-person player, and original Phase 7 textures. Chunk geometry now contains one binary sunlight value per visible face:
 
-- GRASS uses a mottled six-color green palette.
-- ROCK uses a dark irregular six-color neutral-gray palette.
-- Each material is exactly `16 × 16` pixels.
-- Every side, top, and bottom face of a GRASS block uses the same grass material.
-- Every side, top, and bottom face of a ROCK block uses the same rock material.
-- There is no dirt side texture or other face-specific material.
-- There are no normal maps, PBR maps, shadows, ambient occlusion, animation, or texture mipmaps.
+- `BRIGHT` (`1`): the first opaque block reached when scanning a column downward from Y=63;
+- `DARK` (`0`): every opaque block below that first hit.
 
-## Asset ownership and provenance
+AIR does not stop sunlight. An opaque GRASS or ROCK block stops it for every lower block in that X/Z column. A block at Y=63 is BRIGHT when it is the first opaque block. There are no torches, colored lights, sideways flood fill, smooth lighting, day/night cycles, or dynamic shadows.
 
-The grass and rock textures were designed from scratch for this repository as deterministic procedural pixel art. They were not copied, sampled, traced, recolored, or derived from Minecraft, Mojang, RubyDung, or another game. No external game texture file is loaded by the browser.
+## Chunk-level sunlight data
 
-`web/block-textures.mjs` is the authoritative retained source for every texture pixel. It uses fixed original color palettes and deterministic cluster and grain rules. `tools/generate-block-textures.mjs` can regenerate standalone PNG previews from that same source:
+`web/sunlight.mjs` stores one signed byte for each of the world’s 65,536 X/Z columns. The byte records the highest opaque Y coordinate, or `-1` for a completely empty column. This cache is built after terrain and cave generation and before chunk meshing.
 
-```bash
-node tools/generate-block-textures.mjs
-```
+World edits mark their X/Z column dirty. Before affected chunk meshes are rebuilt, only those dirty sunlight columns are rescanned. Existing chunk-boundary invalidation remains active, so changed boundary blocks rebuild both adjoining chunks.
 
-The previews are written to the ignored `build/texture-previews/` directory. The browser generates the same pixels directly at startup, so preview images and gameplay cannot drift apart.
+No world-sized raycast occurs in the fragment shader. The mesher resolves each block to BRIGHT or DARK once and writes that binary state into the existing sixth vertex attribute.
 
-## Atlas and crisp sampling
+## Rendering model
 
-The two `16 × 16` materials are packed into a small runtime atlas. Each tile is surrounded by a one-pixel gutter containing replicated edge pixels. UVs stay within the intended tile, preventing grass and rock from bleeding into one another at atlas boundaries.
+BRIGHT geometry receives full texture color. DARK geometry receives one fixed brightness level of `0.28`, regardless of how far it is from sunlight.
 
-WebGL uses:
+Only DARK geometry receives heavy black distance fog:
 
-- `NEAREST` minification filtering;
-- `NEAREST` magnification filtering;
-- `CLAMP_TO_EDGE` wrapping;
-- no generated mipmap chain.
+- fog begins at 4 blocks from the camera;
+- it reaches its maximum at 30 blocks;
+- it uses five intentionally crude distance steps;
+- maximum black fog strength is 0.96.
 
-This preserves intentionally hard pixel edges while the player moves and at normal viewing distances.
+BRIGHT outdoor geometry does not receive this aggressive cave fog. The clear-sky color remains exactly `#7FCCFF`.
+
+This is deliberately not a modern lighting engine. It has no smooth-light interpolation, ambient occlusion, shadow map, light propagation, emissive blocks, or colored illumination.
 
 ## What appears on screen
 
-After terrain, cave, and meshing progress finish, the player appears on grass beside a substantial cave entrance and initially faces the opening.
+After terrain generation, cave carving, sunlight calculation, and meshing finish, the player appears beside a substantial cave entrance and initially faces it.
 
-The rolling surface is now covered by a visibly mottled primitive green texture. Cave entrances, underground walls, floors, ceilings, and exposed world edges use a much darker irregular gray rock texture. The two blocks are immediately distinguishable, while all cube faces remain materially consistent.
+The rolling outdoor grass surface is fully bright beneath the light-blue sky. Rock and grass covered by another opaque block are immediately and consistently dim. Entering a cave produces a harsh transition from the bright entrance to dark interior geometry. Nearby cave walls remain faintly visible; walls farther down a passage become progressively blacker because of the stepped dark-only fog.
 
-The finite `256 × 64 × 256` world, sharp light-blue `#7FCCFF` sky, cave generation, collision, gravity, jumping, and seed query parameter remain active. Different seeds can be selected with a URL such as `?seed=42`.
+A vertical pit can carry sunlight down through AIR until the first solid floor block. Cave rooms under an intact rock roof remain DARK even when they are close to the surface.
+
+The finite `256 × 64 × 256` world, deterministic seeds, player collision, gravity, jumping, caves, and original crisp textures remain active. Add an integer such as `?seed=42` to the URL for a different deterministic terrain-and-cave layout.
+
+## Original texture ownership
+
+The `16 × 16` grass and rock textures were designed from scratch for this repository as deterministic procedural pixel art. They were not copied, sampled, traced, recolored, or derived from Minecraft, Mojang, RubyDung, or another game.
+
+`web/block-textures.mjs` is the authoritative pixel source. The atlas uses replicated one-pixel gutters, `NEAREST` filtering, `CLAMP_TO_EDGE`, and no mipmaps.
 
 ## Browser controls
 
@@ -78,18 +81,20 @@ python3 -m http.server 8000
 
 Open `http://localhost:8000/` or `http://localhost:8000/web/`.
 
-## Phase 7 structure
+## Phase 8 structure
 
-- `web/block-textures.mjs`: original deterministic grass and rock pixel source.
-- `web/atlas.mjs`: padded atlas construction and bleeding-safe UV bounds.
-- `web/pixel-texture-sampling.mjs`: nearest-neighbor, no-mipmap texture policy.
-- `tools/generate-block-textures.mjs`: retained deterministic PNG preview generator.
-- `web/test/block-textures.test.mjs`: color, checksum, gutter, UV, face-material, sampling, and PNG tests.
+- `web/sunlight.mjs`: compact column sunlight cache, BRIGHT/DARK states, and relighting.
+- `web/world.mjs`: dirty lighting-column and dirty chunk tracking.
+- `web/chunk-mesher.mjs`: binary light-state encoding in visible chunk faces.
+- `web/world-mesh.mjs`: full-world and dirty-chunk sunlight-aware mesh rebuilding.
+- `web/shaders/block.vert.glsl`: passes binary state and camera distance.
+- `web/shaders/block.frag.glsl`: fixed dim cave light and stepped black fog.
+- `web/test/sunlight.test.mjs`: focused sunlight, roof, Y=63, cave-opening, and relighting tests.
 - `web/test/browser-smoke.sh`: real Chromium validation of both GitHub Pages entry layouts.
 
 ## Desktop reference build
 
-The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 7 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
+The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 8 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
 
 ```bash
 ./gradlew build
@@ -99,4 +104,4 @@ The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phas
 
 ## Scope boundary
 
-Phase 7 does not add lighting, shadows, ambient occlusion, PBR materials, animated textures, dirt, additional block types, block interaction, inventory, enemies, sound, or world saving.
+Phase 8 does not add torches, colored or flood-filled light, smooth lighting, shadows, ambient occlusion, day/night cycles, water, lava, additional blocks, block interaction, inventory, enemies, sound, or world saving.
