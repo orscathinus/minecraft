@@ -1,4 +1,8 @@
 import { BlockType, isOpaqueBlock } from "./block-type.mjs";
+import {
+    ChunkManager,
+    ChunkProcessingMode,
+} from "./chunk-manager.mjs";
 import { CaveGenerator } from "./cave-generator.mjs";
 import { FirstPersonPlayer } from "./first-person-player.mjs";
 import { FixedStepTimer } from "./fixed-step-timer.mjs";
@@ -8,7 +12,6 @@ import { VoxelRenderer } from "./renderer.mjs";
 import { LightingConfig, SunlightModel } from "./sunlight.mjs";
 import { SeededTerrainGenerator } from "./terrain-generator.mjs";
 import { WorldConfig } from "./world-config.mjs";
-import { buildFiniteWorldMesh } from "./world-mesh.mjs";
 
 const SKY_RED = 127 / 255;
 const SKY_GREEN = 204 / 255;
@@ -19,14 +22,16 @@ const FIELD_OF_VIEW_RADIANS = 70 * Math.PI / 180;
 class BrowserGame {
     #canvas;
     #status;
+    #debugOverlay;
     #renderer;
     #player;
+    #chunkManager;
     #gl;
-    #worldMesh;
     #seed;
     #terrainRange;
     #caveResult;
     #entrance;
+    #debugVisible;
     #timer = new FixedStepTimer({
         updatesPerSecond: 60,
         maxFrameDeltaSeconds: 0.25,
@@ -39,7 +44,7 @@ class BrowserGame {
     #listeners = [];
     #verifiedGeometry = false;
 
-    static async create(canvas, status) {
+    static async create(canvas, status, debugOverlay) {
         const gl = canvas.getContext("webgl2", {
             alpha: false,
             antialias: false,
@@ -90,77 +95,79 @@ class BrowserGame {
             },
         });
 
-        status.textContent = "Building binary-lit chunk meshes · 0%";
-        const worldMesh = await buildFiniteWorldMesh(world, {
-            sunlight,
-            onProgress(completed, total) {
-                const percent = Math.round(completed / total * 100);
-                status.textContent = `Building binary-lit chunk meshes · ${percent}%`;
-                if (completed % 16 === 0 || completed === total) {
-                    console.info(`World meshing: ${completed}/${total} chunks (${percent}%).`);
-                }
-            },
-        });
-
-        status.textContent = "Spawning first-person player near a cave entrance…";
+        status.textContent = "Preparing the nearest player chunk…";
+        world.clearDirtyChunks();
+        world.clearDirtyLightingColumns?.();
         const renderer = await VoxelRenderer.create(gl);
-        renderer.setMesh(worldMesh);
         const terrainRange = measureTerrainRange(generator);
         const entrance = findNearestSurfaceEntrance(world, generator);
         const spawn = findSpawnNearEntrance(world, entrance);
-        return new BrowserGame(
+        const game = new BrowserGame(
             canvas,
             status,
+            debugOverlay,
             gl,
             renderer,
             world,
-            worldMesh,
+            sunlight,
             seed,
             terrainRange,
             caveResult,
             entrance,
             spawn,
+            readLoadingMode(),
+            readDebugEnabled(),
         );
+        game.#chunkManager.processFrame({ maxChunks: 1, ignoreInterval: true });
+        return game;
     }
 
     constructor(
         canvas,
         status,
+        debugOverlay,
         gl,
         renderer,
         world,
-        worldMesh,
+        sunlight,
         seed,
         terrainRange,
         caveResult,
         entrance,
         spawn,
+        loadingMode,
+        debugVisible,
     ) {
         this.#canvas = canvas;
         this.#status = status;
+        this.#debugOverlay = debugOverlay;
         this.#gl = gl;
         this.#renderer = renderer;
-        this.#worldMesh = worldMesh;
         this.#seed = seed;
         this.#terrainRange = terrainRange;
         this.#caveResult = caveResult;
         this.#entrance = entrance;
+        this.#debugVisible = debugVisible;
         this.#player = new FirstPersonPlayer(canvas, world, {
             position: spawn.position,
             yaw: spawn.yaw,
             pitch: -0.20,
         });
+        this.#chunkManager = new ChunkManager(world, sunlight, renderer, {
+            playerPosition: spawn.position,
+            mode: loadingMode,
+        });
     }
 
     start() {
-        console.info("Starting Cave Game Phase 8 binary-lighting renderer.");
+        const chunkState = this.#chunkManager.snapshot();
+        console.info("Starting Cave Game Phase 9 proximity chunk renderer.");
         console.info("WebGL version:", this.#gl.getParameter(this.#gl.VERSION));
-        console.info("World chunks:", this.#worldMesh.chunkCount);
-        console.info("Visible world faces:", this.#worldMesh.faceCount);
-        console.info("BRIGHT faces:", this.#worldMesh.brightFaceCount);
-        console.info("DARK faces:", this.#worldMesh.darkFaceCount);
+        console.info("Chunk processing mode:", chunkState.mode);
+        console.info("Initial player chunk:", chunkState.playerChunk.key());
         console.info("Player dimensions:", PlayerConfig.width, "×", PlayerConfig.height);
         this.#gl.clearColor(SKY_RED, SKY_GREEN, SKY_BLUE, 1);
+        this.#debugOverlay.hidden = !this.#debugVisible;
         this.#installListeners();
         this.#resize();
         this.#running = true;
@@ -187,6 +194,7 @@ class BrowserGame {
         }
         this.#listeners = [];
         this.#player.dispose();
+        this.#chunkManager.dispose();
         this.#renderer.dispose();
         this.#closed = true;
     }
@@ -198,6 +206,9 @@ class BrowserGame {
             for (let index = 0; index < frame.updateCount; index += 1) {
                 this.#player.update(this.#timer.stepSeconds);
             }
+            const position = this.#player.position;
+            this.#chunkManager.updatePlayerPosition(position[0], position[2]);
+            this.#chunkManager.processFrame();
             this.#render(frame.interpolationAlpha);
             this.#animationFrame = requestAnimationFrame(this.#frame);
         } catch (failure) {
@@ -220,23 +231,41 @@ class BrowserGame {
         );
         this.#gl.clear(this.#gl.COLOR_BUFFER_BIT | this.#gl.DEPTH_BUFFER_BIT);
         this.#renderer.render(projection, this.#player.viewMatrix());
-        if (!this.#verifiedGeometry) {
+        const rendererState = this.#renderer.stats();
+        if (!this.#verifiedGeometry && rendererState.visibleChunks > 0) {
             verifyGeometryWasDrawn(this.#gl, this.#canvas);
             this.#verifiedGeometry = true;
         }
         this.#status.hidden = true;
         const playerState = this.#player.snapshot();
+        const chunks = this.#chunkManager.snapshot();
+        this.#updateDebugOverlay(chunks, rendererState);
         Object.assign(document.documentElement.dataset, {
             appState: "running",
             webgl: "2",
-            phase: "8",
-            drawCalls: String(this.#renderer.drawCalls),
+            phase: "9",
+            drawCalls: String(rendererState.drawCalls),
             glErrors: "0",
-            geometry: "visible",
-            chunkCount: String(this.#worldMesh.chunkCount),
-            worldFaces: String(this.#worldMesh.faceCount),
-            brightFaces: String(this.#worldMesh.brightFaceCount),
-            darkFaces: String(this.#worldMesh.darkFaceCount),
+            geometry: this.#verifiedGeometry ? "visible" : "pending",
+            chunkCount: String(chunks.totalChunks),
+            chunksQueued: String(chunks.queued),
+            chunksMeshed: String(chunks.meshed),
+            chunksVisible: String(chunks.visible),
+            chunkProcessingMode: chunks.mode,
+            chunkMaxPerFrame: String(chunks.maxChunksPerFrame),
+            chunkFrameInterval: String(chunks.frameInterval),
+            chunkPriority: "squared-horizontal-distance",
+            chunkTieBreak: "z-then-x",
+            staleWorkPolicy: "epoch-reprioritize",
+            playerChunk: chunks.playerChunk.key(),
+            firstVisibleChunk: chunks.firstVisibleChunk?.key() ?? "none",
+            lastProcessedChunk: chunks.lastProcessedChunk?.key() ?? "none",
+            chunkLoadingComplete: String(chunks.complete),
+            chunkUploads: String(chunks.totalUploads),
+            unnecessaryDuplicateUploads: String(chunks.unnecessaryDuplicateUploads),
+            worldFaces: String(rendererState.faceCount),
+            brightFaces: String(rendererState.brightFaceCount),
+            darkFaces: String(rendererState.darkFaceCount),
             worldBounds: "0-255,0-63,0-255",
             terrainRange: `${WorldConfig.surfaceMinY}-${WorldConfig.surfaceMaxY}`,
             actualTerrainRange: `${this.#terrainRange.min}-${this.#terrainRange.max}`,
@@ -263,8 +292,23 @@ class BrowserGame {
             playerEyeHeight: PlayerConfig.eyeHeight.toFixed(2),
             playerGrounded: String(playerState.grounded),
             playerModel: "none",
-            controls: "wasd-space-mouse",
+            controls: "wasd-space-mouse-f3-h",
         });
+    }
+
+    #updateDebugOverlay(chunks, rendererState) {
+        if (!this.#debugVisible) return;
+        this.#debugOverlay.textContent = [
+            "CHUNK PROCESSING",
+            `Player chunk: ${chunks.playerChunk.key()}`,
+            `Queued: ${chunks.queued}`,
+            `Meshed: ${chunks.meshed}`,
+            `Visible: ${chunks.visible}`,
+            `Draw calls: ${rendererState.drawCalls}`,
+            `Mode: ${chunks.mode}`,
+            `Budget: ${chunks.maxChunksPerFrame} / ${chunks.frameInterval} frame(s)`,
+            "F3 overlay · H mode",
+        ].join("\n");
     }
 
     #resize() {
@@ -280,6 +324,18 @@ class BrowserGame {
 
     #installListeners() {
         this.#listen(window, "keydown", event => {
+            if (event.code === "F3") {
+                event.preventDefault();
+                this.#debugVisible = !this.#debugVisible;
+                this.#debugOverlay.hidden = !this.#debugVisible;
+                return;
+            }
+            if (event.code === "KeyH" && !event.repeat) {
+                event.preventDefault();
+                const mode = this.#chunkManager.toggleMode();
+                console.info(`Chunk processing mode changed to ${mode}.`);
+                return;
+            }
             if (event.code !== "Escape" || document.pointerLockElement === this.#canvas) return;
             event.preventDefault();
             this.close("Application stopped and graphics resources were released. Close this tab or reload to restart.");
@@ -313,6 +369,17 @@ function readSeed() {
     if (value === null || value.trim() === "") return WorldConfig.defaultSeed;
     const parsed = Number(value);
     return Number.isSafeInteger(parsed) ? parsed : WorldConfig.defaultSeed;
+}
+
+function readLoadingMode() {
+    return new URLSearchParams(window.location.search).get("loading") === "historical"
+        ? ChunkProcessingMode.HISTORICAL
+        : ChunkProcessingMode.NORMAL;
+}
+
+function readDebugEnabled() {
+    const value = new URLSearchParams(window.location.search).get("debugChunks");
+    return value === "1" || value === "true";
 }
 
 function findNearestSurfaceEntrance(world, generator) {
@@ -396,7 +463,7 @@ function verifyGeometryWasDrawn(gl, canvas) {
     for (let index = 0; index < pixels.length; index += 4) {
         if (pixels[index] !== 127 || pixels[index + 1] !== 204 || pixels[index + 2] !== 255) return;
     }
-    throw new Error("The lit cave world mesh did not produce any visible pixels");
+    throw new Error("The proximity-loaded cave world did not produce any visible pixels");
 }
 
 function showStartupFailure(status, failure) {
@@ -416,11 +483,14 @@ function showRuntimeFailure(status, failure) {
 
 const canvas = document.querySelector("#game-canvas");
 const status = document.querySelector("#status");
-if (!(canvas instanceof HTMLCanvasElement) || !(status instanceof HTMLElement)) {
+const debugOverlay = document.querySelector("#chunk-debug");
+if (!(canvas instanceof HTMLCanvasElement)
+    || !(status instanceof HTMLElement)
+    || !(debugOverlay instanceof HTMLElement)) {
     throw new Error("Required browser application elements are missing");
 }
 try {
-    const game = await BrowserGame.create(canvas, status);
+    const game = await BrowserGame.create(canvas, status, debugOverlay);
     game.start();
 } catch (failure) {
     showStartupFailure(status, failure);
