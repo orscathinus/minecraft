@@ -25,7 +25,8 @@ The original `Cave game tech test` build was never publicly released. This proje
 
 ## Rendering
 
-- The original textures are not redistributed. Grass and rock use original deterministic 16×16 project-created textures.
+- The unreleased build's exact texture files are not bundled. Grass and stone use original deterministic 16×16 recreations based on surviving Cave Game and RubyDung screenshots rather than copied Mojang pixel data.
+- The grass recreation uses bright lime-green fine pixel flecks. The stone recreation follows the visible early RubyDung character: pale irregular cobbles separated by near-black joints. Their layouts are deliberately original and are not pixel-identical to Minecraft's assets.
 - Texture-atlas gutters, nearest-neighbor sampling, and disabled mipmaps are implementation safeguards for crisp browser rendering.
 - The exact historical brightness multipliers and fog curve are unknown. The recreation uses full BRIGHT texture color, fixed `0.28` DARK brightness, and five-step black fog from 4 to 30 blocks.
 - Chunk frustum culling and retained GPU meshes are performance implementation details. They do not change the finite world or the proximity order in which unfinished chunks are processed.
