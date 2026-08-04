@@ -1,6 +1,7 @@
-import { DebugCamera } from "./debug-camera.mjs";
+import { FirstPersonPlayer } from "./first-person-player.mjs";
 import { FixedStepTimer } from "./fixed-step-timer.mjs";
 import { perspectiveMatrix } from "./math.mjs";
+import { PlayerConfig } from "./player-physics.mjs";
 import { VoxelRenderer } from "./renderer.mjs";
 import { SeededTerrainGenerator } from "./terrain-generator.mjs";
 import { WorldConfig } from "./world-config.mjs";
@@ -16,7 +17,7 @@ class BrowserGame {
     #canvas;
     #status;
     #renderer;
-    #camera;
+    #player;
     #gl;
     #worldMesh;
     #seed;
@@ -70,14 +71,25 @@ class BrowserGame {
             },
         });
 
-        status.textContent = "Uploading finite world mesh…";
+        status.textContent = "Spawning first-person player…";
         const renderer = await VoxelRenderer.create(gl);
         renderer.setMesh(worldMesh);
         const terrainRange = measureTerrainRange(generator);
-        return new BrowserGame(canvas, status, gl, renderer, worldMesh, seed, terrainRange);
+        const spawnPosition = findSpawnPosition(generator);
+        return new BrowserGame(
+            canvas,
+            status,
+            gl,
+            renderer,
+            world,
+            worldMesh,
+            seed,
+            terrainRange,
+            spawnPosition,
+        );
     }
 
-    constructor(canvas, status, gl, renderer, worldMesh, seed, terrainRange) {
+    constructor(canvas, status, gl, renderer, world, worldMesh, seed, terrainRange, spawnPosition) {
         this.#canvas = canvas;
         this.#status = status;
         this.#gl = gl;
@@ -85,15 +97,19 @@ class BrowserGame {
         this.#worldMesh = worldMesh;
         this.#seed = seed;
         this.#terrainRange = terrainRange;
-        this.#camera = new DebugCamera(canvas);
+        this.#player = new FirstPersonPlayer(canvas, world, {
+            position: spawnPosition,
+            yaw: 0,
+            pitch: -0.16,
+        });
     }
 
     start() {
-        console.info("Starting Cave Game Phase 4 finite-world renderer.");
+        console.info("Starting Cave Game Phase 5 first-person player.");
         console.info("WebGL version:", this.#gl.getParameter(this.#gl.VERSION));
         console.info("World chunks:", this.#worldMesh.chunkCount);
         console.info("Visible world faces:", this.#worldMesh.faceCount);
-        console.info("Actual terrain height range:", this.#terrainRange.min, "through", this.#terrainRange.max);
+        console.info("Player dimensions:", PlayerConfig.width, "×", PlayerConfig.height);
         this.#gl.clearColor(SKY_RED, SKY_GREEN, SKY_BLUE, 1);
         this.#installListeners();
         this.#resize();
@@ -120,7 +136,7 @@ class BrowserGame {
             target.removeEventListener(type, listener, options);
         }
         this.#listeners = [];
-        this.#camera.dispose();
+        this.#player.dispose();
         this.#renderer.dispose();
         this.#closed = true;
     }
@@ -130,7 +146,7 @@ class BrowserGame {
         try {
             const frame = this.#timer.advance(timestamp);
             for (let index = 0; index < frame.updateCount; index += 1) {
-                this.#camera.update(this.#timer.stepSeconds);
+                this.#player.update(this.#timer.stepSeconds);
             }
             this.#render(frame.interpolationAlpha);
             this.#animationFrame = requestAnimationFrame(this.#frame);
@@ -153,16 +169,17 @@ class BrowserGame {
             512,
         );
         this.#gl.clear(this.#gl.COLOR_BUFFER_BIT | this.#gl.DEPTH_BUFFER_BIT);
-        this.#renderer.render(projection, this.#camera.viewMatrix());
+        this.#renderer.render(projection, this.#player.viewMatrix());
         if (!this.#verifiedGeometry) {
             verifyGeometryWasDrawn(this.#gl, this.#canvas);
             this.#verifiedGeometry = true;
         }
         this.#status.hidden = true;
+        const playerState = this.#player.snapshot();
         Object.assign(document.documentElement.dataset, {
             appState: "running",
             webgl: "2",
-            phase: "4",
+            phase: "5",
             drawCalls: String(this.#renderer.drawCalls),
             glErrors: "0",
             geometry: "visible",
@@ -172,6 +189,12 @@ class BrowserGame {
             terrainRange: `${WorldConfig.surfaceMinY}-${WorldConfig.surfaceMaxY}`,
             actualTerrainRange: `${this.#terrainRange.min}-${this.#terrainRange.max}`,
             seed: String(this.#seed),
+            playerWidth: PlayerConfig.width.toFixed(2),
+            playerHeight: PlayerConfig.height.toFixed(2),
+            playerEyeHeight: PlayerConfig.eyeHeight.toFixed(2),
+            playerGrounded: String(playerState.grounded),
+            playerModel: "none",
+            controls: "wasd-space-mouse",
         });
     }
 
@@ -193,7 +216,10 @@ class BrowserGame {
             this.close("Application stopped and graphics resources were released. Close this tab or reload to restart.");
         });
         this.#listen(document, "visibilitychange", () => {
-            if (!document.hidden && this.#running) this.#timer.reset(performance.now());
+            if (!document.hidden && this.#running) {
+                this.#player.resetInput();
+                this.#timer.reset(performance.now());
+            }
         });
         this.#listen(this.#canvas, "webglcontextlost", event => {
             event.preventDefault();
@@ -218,6 +244,12 @@ function readSeed() {
     if (value === null || value.trim() === "") return WorldConfig.defaultSeed;
     const parsed = Number(value);
     return Number.isSafeInteger(parsed) ? parsed : WorldConfig.defaultSeed;
+}
+
+function findSpawnPosition(generator) {
+    const x = Math.floor(WorldConfig.sizeX / 2);
+    const z = Math.floor(WorldConfig.sizeZ / 2);
+    return Object.freeze([x + 0.5, generator.terrainHeight(x, z) + 1, z + 0.5]);
 }
 
 function measureTerrainRange(generator) {

@@ -59,7 +59,7 @@ run_browser_check() {
 
     assert_dom 'data-app-state="running"' "${output}"
     assert_dom 'data-webgl="2"' "${output}"
-    assert_dom 'data-phase="4"' "${output}"
+    assert_dom 'data-phase="5"' "${output}"
     assert_dom 'data-draw-calls="1"' "${output}"
     assert_dom 'data-gl-errors="0"' "${output}"
     assert_dom 'data-geometry="visible"' "${output}"
@@ -69,8 +69,14 @@ run_browser_check() {
     assert_dom 'data-terrain-range="57-63"' "${output}"
     assert_dom 'data-actual-terrain-range="58-62"' "${output}"
     assert_dom 'data-seed="1337"' "${output}"
+    assert_dom 'data-player-width="0.60"' "${output}"
+    assert_dom 'data-player-height="1.62"' "${output}"
+    assert_dom 'data-player-eye-height="1.54"' "${output}"
+    assert_dom 'data-player-grounded="true"' "${output}"
+    assert_dom 'data-player-model="none"' "${output}"
+    assert_dom 'data-controls="wasd-space-mouse"' "${output}"
 }
 
 run_browser_check "${BASE_URL}/" "${ROOT_DOM_OUTPUT}"
 run_browser_check "${BASE_URL}/web/" "${WEB_DOM_OUTPUT}"
-echo "Root and web-directory Phase 4 finite-world smoke tests passed."
+echo "Root and web-directory Phase 5 first-person player smoke tests passed."

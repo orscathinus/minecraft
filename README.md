@@ -10,37 +10,40 @@ This is an independent educational recreation. It is not affiliated with Mojang 
 
 The project supports GitHub Pages from `main` / repository root and through the GitHub Actions deployment of `web/`.
 
-## Current status: Phase 4 finite world generation
+## Current status: Phase 5 first-person player
 
-The browser build generates and renders one deterministic finite world with these exact dimensions:
+The browser build generates the deterministic finite Phase 4 world and places a collision-enabled first-person player on its surface.
 
-- X: `0..255`;
-- Y: `0..63`;
-- Z: `0..255`;
-- `16 × 16` horizontal chunks;
-- 256 chunks total;
-- each chunk spans the complete 64-block height.
+Player approximation:
 
-The default seed is `1337`. Add an integer query parameter to generate another world, for example `?seed=42`. The same seed always recreates the same terrain.
+- height: exactly `1.62` blocks;
+- width: exactly `0.60` blocks;
+- eye height: `1.54` blocks above the feet;
+- axis-aligned bounding box;
+- no visible player model.
 
-Terrain uses two blended low-frequency value-noise layers. Natural column heights remain within Y=57 through Y=63. ROCK fills every column from Y=0 through its surface height, the highest exposed block becomes GRASS, and everything above it remains AIR. No biome logic, trees, water, ores, sand, dirt, bedrock, structures, or decoration are present.
-
-Generation and chunk-meshing progress are displayed on the loading screen and logged to the browser console. All 256 CPU-side chunk meshes are combined into one indexed world mesh for one WebGL draw call.
+The player uses gravity, grounded-only jumping, floor and ceiling collision, horizontal voxel collision, and independent X/Z resolution for wall sliding. GRASS and ROCK are solid; AIR is passable. Movement is simulated through the existing fixed 60-updates-per-second loop, so render-frame rate changes do not change movement or jumping.
 
 ## What appears on screen
 
-After the loading percentages complete, the application opens above the southern edge of a large primitive rolling landscape. The terrain is mostly green grass across the top with exposed gray rock down the finite outer walls. The world ends sharply at X/Z 0 and 255, so flying beyond an edge reveals the finite rectangular land mass surrounded by the light-blue `#7FCCFF` sky.
+After generation and meshing finish, the application opens from the player’s eye position near the center of the rolling grass world. The camera is close to the surface rather than flying above the map. The user can walk across grass, jump onto or over one-block height changes, collide with rock and grass blocks, and look around with the mouse.
 
-The default seed produces gentle, rough variations across the upper world layers rather than modern Minecraft mountains or biome transitions. Texture pixels remain sharp.
+The finite world, sharp placeholder textures, light-blue `#7FCCFF` sky, and seed query parameter remain unchanged. No player body is rendered in front of or behind the camera.
 
 ## Browser controls
 
 - Click the canvas: capture the mouse.
-- Mouse or arrow keys: look around.
-- `W`, `A`, `S`, `D`: fly horizontally.
-- `Q` / `E`: move down / up.
-- Hold `Shift`: fly faster.
-- `Escape`: release the mouse; press again to stop and release graphics resources.
+- Move the mouse: look left, right, up, and down.
+- `W` / `S`: move forward / backward.
+- `A` / `D`: strafe left / right.
+- `Space`: jump while grounded.
+- `Escape`: release the mouse; press again while released to stop and release graphics resources.
+
+There is no flying, sprinting, crouching, swimming, or automatic step-up.
+
+## World and seed
+
+The finite world remains exactly X/Z `0..255` and Y `0..63`, divided into a `16 × 16` horizontal grid of 256 full-height chunks. The default seed is `1337`. Add an integer query parameter such as `?seed=42` to create a different deterministic landscape.
 
 ## Browser development
 
@@ -53,18 +56,17 @@ python3 -m http.server 8000
 
 Open `http://localhost:8000/` or `http://localhost:8000/web/`.
 
-## Phase 4 structure
+## Phase 5 structure
 
-- `web/world-config.mjs`: authoritative finite dimensions and surface range.
-- `web/terrain-generator.mjs`: seeded low-frequency value-noise terrain.
-- `web/world.mjs`: bounds-enforced chunk storage and block access.
-- `web/chunk-mesher.mjs`: per-chunk hidden-face generation.
-- `web/world-mesh.mjs`: aggregation of 256 chunk meshes into one indexed upload.
-- `web/app.mjs`: loading progress, seed selection, camera, and rendering lifecycle.
+- `web/aabb.mjs`: reusable AABB construction and intersection tests.
+- `web/player-physics.mjs`: player dimensions, gravity, jumping, voxel collision, and wall sliding.
+- `web/first-person-player.mjs`: keyboard, pointer-lock, mouse-look, and focus-reset handling.
+- `web/app.mjs`: fixed-step player updates and first-person rendering.
+- `web/test/player-physics.test.mjs`: focused floor, ceiling, wall, sliding, grounding, and frame-rate tests.
 
 ## Desktop reference build
 
-The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 4 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
+The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 5 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
 
 ```bash
 ./gradlew build
@@ -74,4 +76,4 @@ The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phas
 
 ## Scope boundary
 
-Phase 4 does not add caves, collision, a player entity, gravity, jumping, block breaking, block placement, world saving, water, trees, ores, structures, or modern Minecraft biome systems.
+Phase 5 does not add caves, block breaking, block placement, inventory, crouching, sprinting, swimming, step-up, a player model, enemies, sound, or world saving.

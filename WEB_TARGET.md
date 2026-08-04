@@ -14,32 +14,36 @@ The primary public build is a browser-playable application hosted by GitHub Page
 
 The browser build lives in `web/`. A root `index.html` loads the same modules for branch-based GitHub Pages.
 
-## Phase 4 finite world generation
+## Phase 5 first-person player
 
-The public target now generates one deterministic finite world with exact dimensions X/Z `0..255` and Y `0..63`. It contains a `16 × 16` horizontal grid of 256 chunks, each covering the full 64-block height.
+The temporary free-flying debug camera is replaced by a collision-enabled first-person player. The player body is an axis-aligned bounding box exactly `0.60` blocks wide and `1.62` blocks high. The camera sits `1.54` blocks above the player’s feet, slightly below the top of the body. Pitch is clamped to ±89 degrees.
 
-`web/world-config.mjs` is the authoritative source for all world dimensions, chunk counts, the Y=57 through Y=63 natural-surface band, and the default seed. World reads outside the finite box return AIR; writes outside it are rejected; chunks outside the 16×16 grid cannot be registered.
+`web/player-physics.mjs` is independent of browser input and rendering. It applies gravity, terminal velocity, grounded-only jumping, and normalized horizontal movement during fixed updates. Movement is divided into collision substeps and resolved in X, Z, then Y order. Independent horizontal resolution allows diagonal movement to slide along walls rather than stopping entirely.
 
-`SeededTerrainGenerator` blends two smooth low-frequency value-noise layers. ROCK fills each column from Y=0 through its generated height. Only the highest sky-exposed solid block becomes GRASS, and blocks above remain AIR. The bottom layer is therefore completely solid. No biome selection or decorative systems participate.
+Collision enumerates voxel cells overlapped by the proposed player AABB and treats GRASS and ROCK as solid. AIR is non-solid. Downward Y collision establishes the grounded state; upward Y collision cancels vertical velocity at ceilings. The implementation has no crouching, sprinting, flying, swimming, or automatic step-up.
 
-The asynchronous browser path yields between batches and reports generation and meshing progress through the status overlay and console. The synchronous path supports deterministic Node tests.
+## Browser input
+
+`web/first-person-player.mjs` owns pointer-lock and keyboard input:
+
+- W/S move forward and backward;
+- A/D strafe;
+- Space queues one grounded jump;
+- mouse movement adjusts yaw and pitch only while the canvas owns pointer lock;
+- Escape releases pointer lock through browser behavior, while a second Escape after release closes the application.
+
+Pending mouse movement and held keys are cleared on blur, visibility loss, and pointer-lock changes. This prevents stale mouse deltas from causing a large camera jump after focus returns.
 
 ## Rendering architecture
 
-Each loaded chunk is meshed separately through `ChunkMesher`, preserving hidden-face removal across loaded chunk borders. `world-mesh.mjs` then combines all 256 CPU-side chunk meshes into one indexed mesh for a single GPU upload and one draw call. This does not change the rebuildable chunk-mesh abstraction needed by later phases.
-
-The debug camera starts just beyond the southern world edge and looks inward. Its increased flight speed makes the 256-block-wide world practical to inspect. The projection far plane is 512 blocks.
-
-## Seed selection
-
-The default seed is `1337`. An integer `seed` query parameter overrides it. For example, `?seed=42` creates a different deterministic landscape while reusing `?seed=42` recreates the same one.
+The finite Phase 4 world still uses 256 CPU-side chunk meshes combined into one indexed WebGL upload and one draw call. Only the view matrix changes: it now comes from the player eye position. No first-person arms, third-person body, shadow, or player mesh is rendered.
 
 ## Testing
 
-Node tests verify exact bounds and chunk counts, deterministic same-seed heights, visibly different sampled heights for another seed, the permitted block set, one exposed grass cap per column, the 57–63 terrain range, a solid ROCK bottom layer, rejected out-of-bounds writes, and aggregation of all 256 chunk meshes.
+Node tests verify AABB overlap and contact semantics, floor collision, ceiling collision, wall collision, diagonal wall sliding, grounded-to-airborne-to-grounded transitions, and identical fixed-step movement when render timestamps are supplied at 30 FPS and 144 FPS.
 
-The Chromium smoke test loads both Pages entry points and requires WebGL 2, Phase 4 state, one draw call, 256 chunks, the exact default-seed face count, finite-world metadata, visible geometry, and zero WebGL errors.
+The Chromium smoke test loads both Pages entry points and requires Phase 5 state, WebGL 2, visible geometry, one world draw call, 256 chunks, zero WebGL errors, the exact player dimensions, a grounded player, documented controls, and no rendered player model.
 
 ## Scope boundary
 
-Phase 4 does not add caves, water, trees, ores, sand, dirt, bedrock, structures, decorations, collision, a player body, gravity, jumping, block interaction, or persistence.
+Phase 5 does not add caves, block breaking, block placement, inventory, crouching, sprinting, swimming, step-up, a player model, enemies, sound, or persistence.
