@@ -1,5 +1,5 @@
 export const BLOCK_TEXTURE_SIZE = 16;
-export const BLOCK_TEXTURE_VERSION = "phase-12-rubydung-inspired-v2";
+export const BLOCK_TEXTURE_VERSION = "phase-7-original-v1";
 
 export const BlockMaterial = Object.freeze({
     GRASS: "grass",
