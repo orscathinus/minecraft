@@ -14,39 +14,55 @@ The primary public build is a browser-playable application hosted by GitHub Page
 
 The browser build lives in `web/`. A root `index.html` loads the same modules for branch-based GitHub Pages.
 
-## Phase 8 binary sunlight
+## Phase 9 proximity-ordered processing
 
-The lighting model has exactly two meaningful states: BRIGHT and DARK. `web/sunlight.mjs` scans each X/Z column downward from Y=63 and records the first opaque block. AIR allows the scan to continue. The first GRASS or ROCK block is BRIGHT; every opaque block below it is DARK.
+The world remains a finite `16 × 16` chunk grid. Each chunk covers `16 × 16` blocks horizontally and all 64 vertical layers.
 
-The sunlight cache is an `Int8Array` with one entry per X/Z column, using 65,536 bytes for the complete 256 × 256 horizontal world. It stores the highest opaque Y coordinate or `-1` for an empty column.
+Terrain, caves, and binary sunlight are deterministic prerequisites. Once the player spawn is known, `web/chunk-manager.mjs` creates one work record for each chunk. The player's current chunk is calculated with `floor(worldCoordinate / 16)` and clamped to the finite grid.
 
-## Relighting and mesh rebuilding
+A binary-heap priority queue orders unfinished work by squared horizontal distance from the player's chunk. Equal distances use chunk Z and then chunk X as deterministic tie breaks.
 
-`World.setBlock` marks the edited X/Z column dirty in addition to its chunk. Boundary edits continue to invalidate neighboring chunks. `SunlightModel.rebuildDirtyColumns` rescans only changed columns, and `rebuildDirtyChunkMeshes` performs relighting before rebuilding affected chunk geometry.
+## Frame budgets
 
-The initial load runs terrain generation, cave carving, full sunlight calculation, and then chunk meshing. The binary state is written into the sixth float of every visible vertex. The fragment shader performs no voxel lookup or world-sized raycast.
+All GPU uploads remain on the rendering thread inside the animation-frame callback.
 
-## Dark cave rendering
+- Normal mode: at most two chunk mesh-and-upload jobs each frame.
+- Historical-loading mode: one job every ten frames.
 
-The vertex shader passes the binary state and view-space distance. The fragment shader applies exactly one full brightness and one fixed dim brightness:
+No `sleep`, busy wait, or blocking delay is inserted. Physics, input, rendering, and pointer-lock handling continue on every frame. Historical mode merely withholds processing tokens between eligible frames.
 
-- BRIGHT: `1.00` texture brightness;
-- DARK: `0.28` texture brightness.
+The player's own chunk is processed synchronously before the first playable frame. Remaining chunks become visible incrementally in priority order.
 
-Only DARK geometry receives black distance fog. The fog begins at 4 blocks, ends at 30 blocks, has five deliberately crude steps, and reaches 0.96 strength. BRIGHT geometry receives no aggressive cave fog. The clear color remains exactly `#7FCCFF`.
+## Reprioritization and stale work
 
-There is no smooth-light gradient between blocks, ambient occlusion, dynamic shadow, day/night cycle, torch light, colored light, or sideways light flood fill.
+Crossing a chunk boundary clears and rebuilds the unfinished queue around the new player chunk. Every queue entry contains the current scheduling epoch and chunk revision. Entries from an earlier epoch or revision are ignored.
 
-## Existing systems
+Already visible chunks remain uploaded and are not requeued because of movement. World changes create explicit refresh records. Dirty sunlight columns are rebuilt first, followed by the affected chunk meshes and any boundary neighbors.
 
-The finite seeded terrain, sphere-worm caves, seam-aware chunk meshing, original 16 × 16 grass and rock textures, first-person collision, gravity, and jumping remain active. The complete world still uses one aggregate indexed WebGL draw call.
+## Renderer ownership
+
+`web/renderer.mjs` stores one independently disposable `GpuMesh` per chunk key. Uploading a refresh constructs the replacement mesh, disposes the prior VAO/VBO/EBO for that key, and then installs the new mesh.
+
+The renderer draws every currently visible nonempty chunk. Draw calls therefore grow as chunks become visible rather than remaining one aggregate draw call. A chunk upload never occurs from a worker thread.
+
+## Optional overlay and modes
+
+`F3` toggles an optional overlay containing player chunk, queued, meshed, visible, draw calls, processing mode, and budget. The same overlay can start enabled through `?debugChunks=1`.
+
+`H` switches processing modes. Historical mode can also be selected at startup through `?loading=historical`.
+
+## Existing lighting and assets
+
+Chunk meshes still encode exactly two light states. BRIGHT faces use full texture color. DARK faces use fixed `0.28` brightness and heavy stepped black fog between 4 and 30 blocks. The clear color remains exactly `#7FCCFF`.
+
+The grass and rock materials remain original deterministic `16 × 16` procedural textures with replicated atlas gutters, nearest filtering, and no mipmaps.
 
 ## Testing
 
-Node tests verify unobstructed sunlight, AIR transmission, roof blocking, Y=63 behavior, vertically exposed cave openings, binary vertex values, BRIGHT/DARK face counts, dirty-column relighting, and mesh rebuilding order.
+Node tests verify priority ordering, deterministic ties, finite player-chunk calculation, normal and historical budgets, unfinished-work reprioritization, dirty relighting before refresh, and prevention of reasonless duplicate uploads.
 
-The Chromium smoke test loads both GitHub Pages entry points and requires Phase 8 state, the original texture metadata, exact `#7FCCFF` sky metadata, two lighting states, fixed dark brightness, dark-only stepped fog, nonzero BRIGHT and DARK geometry, no fragment world raycasts, visible geometry, one draw call, and zero WebGL errors.
+The Chromium smoke test loads both GitHub Pages entry points in normal mode and also loads historical mode with the overlay enabled. It verifies visible nearby chunks, remaining queued historical work, processing metadata, original lighting and texture metadata, responsive startup, and zero WebGL errors.
 
 ## Scope boundary
 
-Phase 8 does not add torches, colored or propagated block light, smooth lighting, dynamic shadows, ambient occlusion, day/night cycles, additional blocks, block interaction, inventory, enemies, sound, or persistence.
+Phase 9 does not add infinite terrain, chunk unloading, worker-thread generation, frustum culling, occlusion culling, smooth lighting, block interaction, inventory, enemies, sound, or persistence.

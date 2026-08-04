@@ -19,7 +19,7 @@ body { position: relative; }
     position: absolute;
     top: max(0.75rem, env(safe-area-inset-top));
     left: max(0.75rem, env(safe-area-inset-left));
-    max-width: min(44rem, calc(100vw - 1.5rem));
+    max-width: min(48rem, calc(100vw - 1.5rem));
     padding: 0.45rem 0.65rem;
     border-radius: 0.35rem;
     color: rgb(255 255 255 / 92%);
@@ -29,6 +29,23 @@ body { position: relative; }
     pointer-events: none;
     user-select: none;
 }
+#chunk-debug {
+    position: absolute;
+    top: max(3.2rem, calc(env(safe-area-inset-top) + 3.2rem));
+    left: max(0.75rem, env(safe-area-inset-left));
+    min-width: 13rem;
+    margin: 0;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid rgb(255 255 255 / 22%);
+    border-radius: 0.35rem;
+    color: #fff;
+    background: rgb(0 0 0 / 68%);
+    font: 600 0.76rem/1.42 ui-monospace, SFMono-Regular, Consolas, monospace;
+    white-space: pre;
+    pointer-events: none;
+    user-select: none;
+}
+#chunk-debug[hidden] { display: none; }
 #status {
     position: absolute;
     inset: 50% auto auto 50%;

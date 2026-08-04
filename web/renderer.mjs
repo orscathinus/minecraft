@@ -14,12 +14,13 @@ const ERROR_NAMES = new Map([
 export class VoxelRenderer {
     #gl;
     #program;
-    #mesh = null;
+    #meshes = new Map();
     #texture;
     #projection;
     #view;
     #atlas;
     #drawCalls = 0;
+    #totalUploads = 0;
 
     static async create(gl) {
         const [vertexSource, fragmentSource] = await Promise.all([
@@ -45,14 +46,38 @@ export class VoxelRenderer {
         assertNoGlErrors(gl, "renderer initialization");
     }
 
+    uploadChunkMesh(position, meshData, { reason = "initial" } = {}) {
+        const key = chunkKey(position);
+        const previous = this.#meshes.get(key);
+        const next = new GpuMesh(this.#gl, meshData, { key, reason });
+        previous?.dispose();
+        this.#meshes.set(key, next);
+        this.#totalUploads += 1;
+        assertNoGlErrors(this.#gl, `chunk mesh upload ${key}`);
+        return previous !== undefined;
+    }
+
+    removeChunkMesh(position) {
+        const key = chunkKey(position);
+        const mesh = this.#meshes.get(key);
+        if (!mesh) return false;
+        mesh.dispose();
+        this.#meshes.delete(key);
+        return true;
+    }
+
+    clearChunkMeshes() {
+        for (const mesh of this.#meshes.values()) mesh.dispose();
+        this.#meshes.clear();
+    }
+
+    // Retained for small isolated renderer tests and legacy development tools.
     setMesh(meshData) {
-        this.#mesh?.dispose();
-        this.#mesh = new GpuMesh(this.#gl, meshData);
-        assertNoGlErrors(this.#gl, "mesh upload");
+        this.clearChunkMeshes();
+        this.uploadChunkMesh({ key: () => "aggregate" }, meshData, { reason: "aggregate" });
     }
 
     render(projectionMatrix, viewMatrix) {
-        if (!this.#mesh) throw new Error("No mesh has been assigned to the renderer");
         const gl = this.#gl;
         gl.useProgram(this.#program);
         gl.uniformMatrix4fv(this.#projection, false, projectionMatrix);
@@ -60,17 +85,39 @@ export class VoxelRenderer {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.#texture);
         gl.uniform1i(this.#atlas, 0);
-        this.#mesh.draw();
-        this.#drawCalls = 1;
+        let drawCalls = 0;
+        for (const mesh of this.#meshes.values()) {
+            if (mesh.draw()) drawCalls += 1;
+        }
+        this.#drawCalls = drawCalls;
         assertNoGlErrors(gl, "frame render");
     }
 
+    stats() {
+        let faceCount = 0;
+        let brightFaceCount = 0;
+        let darkFaceCount = 0;
+        for (const mesh of this.#meshes.values()) {
+            faceCount += mesh.faceCount;
+            brightFaceCount += mesh.brightFaceCount;
+            darkFaceCount += mesh.darkFaceCount;
+        }
+        return Object.freeze({
+            visibleChunks: this.#meshes.size,
+            drawCalls: this.#drawCalls,
+            faceCount,
+            brightFaceCount,
+            darkFaceCount,
+            totalUploads: this.#totalUploads,
+        });
+    }
+
     get drawCalls() { return this.#drawCalls; }
+    get visibleChunkCount() { return this.#meshes.size; }
 
     dispose() {
         const gl = this.#gl;
-        this.#mesh?.dispose();
-        this.#mesh = null;
+        this.clearChunkMeshes();
         if (this.#texture) {
             gl.deleteTexture(this.#texture);
             this.#texture = null;
@@ -89,12 +136,20 @@ class GpuMesh {
     #ebo;
     #count;
     #type;
+    #faceCount;
+    #brightFaceCount;
+    #darkFaceCount;
+    #reason;
 
-    constructor(gl, data) {
+    constructor(gl, data, { reason }) {
         validateMesh(data);
         this.#gl = gl;
         this.#count = data.indices.length;
         this.#type = data.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+        this.#faceCount = data.faceCount ?? Math.floor(data.indices.length / 6);
+        this.#brightFaceCount = data.brightFaceCount ?? 0;
+        this.#darkFaceCount = data.darkFaceCount ?? Math.max(0, this.#faceCount - this.#brightFaceCount);
+        this.#reason = reason;
         this.#vao = required(gl.createVertexArray(), "vertex array");
         this.#vbo = required(gl.createBuffer(), "vertex buffer");
         this.#ebo = required(gl.createBuffer(), "index buffer");
@@ -117,11 +172,18 @@ class GpuMesh {
     }
 
     draw() {
+        if (this.#count === 0) return false;
         const gl = this.#gl;
         gl.bindVertexArray(this.#vao);
         gl.drawElements(gl.TRIANGLES, this.#count, this.#type, 0);
         gl.bindVertexArray(null);
+        return true;
     }
+
+    get faceCount() { return this.#faceCount; }
+    get brightFaceCount() { return this.#brightFaceCount; }
+    get darkFaceCount() { return this.#darkFaceCount; }
+    get reason() { return this.#reason; }
 
     dispose() {
         const gl = this.#gl;
@@ -207,6 +269,13 @@ function validateMesh(data) {
     if (data.vertices.length % CHUNK_VERTEX_FLOATS !== 0) {
         throw new RangeError("Mesh vertex data has an invalid stride");
     }
+}
+
+function chunkKey(position) {
+    if (!position || typeof position.key !== "function") {
+        throw new TypeError("chunk position must provide key()");
+    }
+    return position.key();
 }
 
 async function loadText(url) {
