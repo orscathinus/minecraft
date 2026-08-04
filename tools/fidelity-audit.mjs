@@ -115,10 +115,11 @@ check("the player has no rendered model", () => {
         "renderer contains a prohibited player representation");
 });
 
-check("runtime block mutation is limited to deterministic generation", () => {
+check("runtime block mutation is limited to deterministic generation and fixtures", () => {
     const permitted = new Set([
         "web/cave-generator.mjs",
         "web/terrain-generator.mjs",
+        "web/test-chunk.mjs",
         "web/world.mjs",
     ]);
     const offenders = [];
@@ -166,6 +167,7 @@ const report = {
     checks: checks.length,
     failures,
     executableFilesScanned: executableFiles.length,
+    permittedDeterministicFixture: "web/test-chunk.mjs",
 };
 
 if (process.argv.includes("--json")) {
