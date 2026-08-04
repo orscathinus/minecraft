@@ -10,3 +10,4 @@ out/
 .DS_Store
 Thumbs.db
 hs_err_pid*
+gradle/wrapper/gradle-wrapper.jar

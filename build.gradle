@@ -1,9 +1,11 @@
+import org.gradle.api.tasks.wrapper.Wrapper
+
 plugins {
     id 'application'
 }
 
 group = 'dev.orscathinus'
-version = '0.0.1-SNAPSHOT'
+version = '0.1.0-SNAPSHOT'
 
 def lwjglVersion = '3.4.1'
 def jomlVersion = '1.10.8'
@@ -51,11 +53,29 @@ dependencies {
 }
 
 application {
-    mainClass = 'dev.orscathinus.cavegame.CaveGame'
+    mainClass = 'dev.orscathinus.cavegame.Main'
 
     if (osName.contains('mac') || osName.contains('darwin')) {
         applicationDefaultJvmArgs = ['-XstartOnFirstThread']
     }
+}
+
+tasks.register('smokeTest', JavaExec) {
+    group = 'verification'
+    description = 'Opens a hidden OpenGL window briefly and exits automatically.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = application.mainClass
+    args '--smoke-test'
+
+    if (osName.contains('mac') || osName.contains('darwin')) {
+        jvmArgs '-XstartOnFirstThread'
+    }
+}
+
+tasks.named('wrapper', Wrapper) {
+    gradleVersion = '9.6.1'
+    distributionType = Wrapper.DistributionType.BIN
+    distributionSha256Sum = '9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14'
 }
 
 tasks.withType(JavaCompile).configureEach {

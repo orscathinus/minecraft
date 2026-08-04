@@ -21,10 +21,11 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Gradle 9.6.1
+      - name: Set up Gradle cache and wrapper validation
         uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: '9.6.1'
 
       - name: Build and test
-        run: gradle --no-daemon clean build
+        run: ./gradlew --no-daemon clean build
+
+      - name: Smoke-test the OpenGL application
+        run: xvfb-run -a ./gradlew --no-daemon smokeTest
