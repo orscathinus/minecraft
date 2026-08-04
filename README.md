@@ -10,23 +10,35 @@ This is an independent educational recreation. It is not affiliated with Mojang 
 
 The project supports GitHub Pages from `main` / repository root and through the GitHub Actions deployment of `web/`.
 
-## Current status: Phase 2 browser voxel renderer
+## Current status: Phase 3 block and chunk system
 
-The browser build now renders two indexed voxel cubes through WebGL 2:
+The browser build now renders a deterministic `16 × 64 × 16` chunk backed by compact voxel data:
 
-- one grass cube and one rock cube;
-- an original generated `32 × 16` atlas containing two `16 × 16` textures;
-- the same material texture on all six faces of each cube;
-- nearest-neighbor filtering for sharp pixels;
-- perspective projection that responds to resizing;
-- a temporary movable debug camera;
-- depth testing and back-face culling;
-- resource-file vertex and fragment shaders;
-- position, texture-coordinate, and brightness attributes;
-- one combined mesh and one draw call for both cubes;
-- explicit cleanup of vertex arrays, buffers, programs, shaders, and textures.
+- `BlockType` contains only `AIR`, `GRASS`, and `ROCK`;
+- each chunk uses one 16,384-byte `Uint8Array` rather than one object per block;
+- world and local coordinates convert correctly across positive and negative chunk boundaries;
+- missing chunks and out-of-height reads safely return AIR;
+- AIR is transparent, while GRASS and ROCK are opaque;
+- `ChunkMesher` emits only faces adjacent to AIR or unavailable world data;
+- shared internal faces are removed, including faces across loaded chunk boundaries;
+- all visible faces in the test chunk are combined into one rebuildable `ChunkMesh`;
+- the renderer uploads and draws the chunk mesh once rather than drawing each block separately;
+- every emitted vertex retains position, texture-coordinate, and brightness attributes.
 
-There is still **no terrain, collision, caves, chunk generation, player physics, breaking, or placement**.
+There is still **no procedural terrain, caves, collision, player physics, breaking, or placement**.
+
+## What appears on screen
+
+The application opens against the light-blue `#7FCCFF` sky and displays one deterministic test chunk. The chunk contains:
+
+- a rock floor;
+- low rock perimeter walls;
+- a doorway in the near wall;
+- a solid rock ridge;
+- a two-block-wide, three-block-high empty tunnel through the ridge;
+- six grass blocks placed around the room.
+
+The debug camera starts outside and above the doorway, looking into the chunk. Internal faces between neighboring solid blocks are absent, but all visible exterior and tunnel surfaces render with sharp grass or rock textures.
 
 ## Browser controls
 
@@ -36,10 +48,6 @@ There is still **no terrain, collision, caves, chunk generation, player physics,
 - `Q` / `E`: move down / up.
 - Hold `Shift`: move faster.
 - `Escape`: release the mouse; press again to stop and release graphics resources.
-
-## What appears on screen
-
-The application opens against the light-blue `#7FCCFF` sky. A green grass-textured cube and a gray rock-textured cube appear side by side. Moving or rotating the debug camera reveals every side, with modest face brightness differences making cube orientation easy to inspect. The original placeholder texture pixels remain crisp rather than blurred.
 
 ## Browser development
 
@@ -52,18 +60,21 @@ python3 -m http.server 8000
 
 Open `http://localhost:8000/` or `http://localhost:8000/web/`.
 
-## Browser renderer structure
+## Phase 3 structure
 
-- `web/renderer.mjs`: shader program, atlas texture, VAO/VBO/EBO, draw, and disposal lifecycle.
-- `web/mesh.mjs`: reusable aggregate mesh data suitable for later chunk meshes.
-- `web/atlas.mjs`: original atlas pixels and tile-coordinate calculations.
-- `web/debug-camera.mjs`: temporary Phase 2 camera controls.
-- `web/math.mjs`: perspective and view matrices.
-- `web/shaders/`: GLSL ES 3.00 shader resources.
+- `web/block-type.mjs`: AIR, GRASS, and ROCK definitions.
+- `web/chunk-position.mjs`: immutable integer horizontal chunk coordinates.
+- `web/chunk.mjs`: compact `16 × 64 × 16` storage and index formula.
+- `web/world-coordinates.mjs`: global, chunk, and local coordinate conversions.
+- `web/world.mjs`: loaded-chunk registry and bounds-safe global lookup.
+- `web/chunk-mesh.mjs`: CPU-side rebuildable mesh data.
+- `web/chunk-mesher.mjs`: hidden-face removal and indexed mesh generation.
+- `web/test-chunk.mjs`: deterministic Phase 3 room and tunnel.
+- `web/renderer.mjs`: WebGL upload, one chunk draw, and GPU disposal.
 
 ## Desktop reference build
 
-The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 2 renderer is implemented in WebGL 2 because GitHub Pages cannot execute native LWJGL code.
+The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 3 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
 
 ```bash
 ./gradlew build
