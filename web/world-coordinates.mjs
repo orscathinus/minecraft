@@ -1,8 +1,9 @@
 import { ChunkPosition } from "./chunk-position.mjs";
+import { WorldConfig } from "./world-config.mjs";
 
-export const CHUNK_WIDTH = 16;
-export const CHUNK_DEPTH = 16;
-export const WORLD_HEIGHT = 64;
+export const CHUNK_WIDTH = WorldConfig.chunkWidth;
+export const CHUNK_DEPTH = WorldConfig.chunkDepth;
+export const WORLD_HEIGHT = WorldConfig.height;
 
 export function chunkCoordinate(globalCoordinate) {
     requireInteger(globalCoordinate, "globalCoordinate");
@@ -29,7 +30,7 @@ export function globalToLocalPosition(globalX, globalZ) {
 }
 
 export function isWorldY(y) {
-    return Number.isInteger(y) && y >= 0 && y < WORLD_HEIGHT;
+    return Number.isInteger(y) && y >= WorldConfig.minY && y <= WorldConfig.maxY;
 }
 
 export function requireLocal(value, name, size) {

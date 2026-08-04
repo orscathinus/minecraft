@@ -32,6 +32,16 @@ if [[ -z "${BROWSER}" ]]; then
     exit 1
 fi
 
+assert_dom() {
+    local pattern="$1"
+    local output="$2"
+    if ! grep -q "${pattern}" "${output}"; then
+        echo "Missing expected DOM pattern: ${pattern}" >&2
+        cat "${output}" >&2
+        exit 1
+    fi
+}
+
 run_browser_check() {
     local url="$1"
     local output="$2"
@@ -43,20 +53,24 @@ run_browser_check() {
         --enable-webgl \
         --use-angle=swiftshader \
         --enable-unsafe-swiftshader \
-        --virtual-time-budget=7000 \
+        --virtual-time-budget=30000 \
         --dump-dom \
         "${url}" >"${output}"
 
-    grep -q 'data-app-state="running"' "${output}"
-    grep -q 'data-webgl="2"' "${output}"
-    grep -q 'data-phase="3"' "${output}"
-    grep -q 'data-draw-calls="1"' "${output}"
-    grep -q 'data-gl-errors="0"' "${output}"
-    grep -q 'data-geometry="visible"' "${output}"
-    grep -q 'data-chunk-count="1"' "${output}"
-    grep -q 'data-chunk-faces="1220"' "${output}"
+    assert_dom 'data-app-state="running"' "${output}"
+    assert_dom 'data-webgl="2"' "${output}"
+    assert_dom 'data-phase="4"' "${output}"
+    assert_dom 'data-draw-calls="1"' "${output}"
+    assert_dom 'data-gl-errors="0"' "${output}"
+    assert_dom 'data-geometry="visible"' "${output}"
+    assert_dom 'data-chunk-count="256"' "${output}"
+    assert_dom 'data-world-faces="197256"' "${output}"
+    assert_dom 'data-world-bounds="0-255,0-63,0-255"' "${output}"
+    assert_dom 'data-terrain-range="57-63"' "${output}"
+    assert_dom 'data-actual-terrain-range="58-62"' "${output}"
+    assert_dom 'data-seed="1337"' "${output}"
 }
 
 run_browser_check "${BASE_URL}/" "${ROOT_DOM_OUTPUT}"
 run_browser_check "${BASE_URL}/web/" "${WEB_DOM_OUTPUT}"
-echo "Root and web-directory Phase 3 chunk smoke tests passed."
+echo "Root and web-directory Phase 4 finite-world smoke tests passed."

@@ -1,9 +1,10 @@
-import { ChunkMesher } from "./chunk-mesher.mjs";
 import { DebugCamera } from "./debug-camera.mjs";
 import { FixedStepTimer } from "./fixed-step-timer.mjs";
 import { perspectiveMatrix } from "./math.mjs";
 import { VoxelRenderer } from "./renderer.mjs";
-import { createDeterministicTestWorld } from "./test-chunk.mjs";
+import { SeededTerrainGenerator } from "./terrain-generator.mjs";
+import { WorldConfig } from "./world-config.mjs";
+import { buildFiniteWorldMesh } from "./world-mesh.mjs";
 
 const SKY_RED = 127 / 255;
 const SKY_GREEN = 204 / 255;
@@ -17,7 +18,9 @@ class BrowserGame {
     #renderer;
     #camera;
     #gl;
-    #chunkMesh;
+    #worldMesh;
+    #seed;
+    #terrainRange;
     #timer = new FixedStepTimer({
         updatesPerSecond: 60,
         maxFrameDeltaSeconds: 0.25,
@@ -42,27 +45,55 @@ class BrowserGame {
             throw new Error("WebGL 2 is unavailable. Use a current browser with hardware acceleration enabled.");
         }
 
-        status.textContent = "Building the deterministic Phase 3 test chunk…";
+        const seed = readSeed();
+        const generator = new SeededTerrainGenerator(seed);
+        console.info(`Generating finite world with seed ${seed}.`);
+        status.textContent = `Generating finite world · seed ${seed} · 0%`;
+        const world = await generator.generateWorld({
+            onProgress(completed, total) {
+                const percent = Math.round(completed / total * 100);
+                status.textContent = `Generating finite world · seed ${seed} · ${percent}%`;
+                if (completed % 16 === 0 || completed === total) {
+                    console.info(`World generation: ${completed}/${total} chunks (${percent}%).`);
+                }
+            },
+        });
+
+        status.textContent = "Building visible chunk meshes · 0%";
+        const worldMesh = await buildFiniteWorldMesh(world, {
+            onProgress(completed, total) {
+                const percent = Math.round(completed / total * 100);
+                status.textContent = `Building visible chunk meshes · ${percent}%`;
+                if (completed % 16 === 0 || completed === total) {
+                    console.info(`World meshing: ${completed}/${total} chunks (${percent}%).`);
+                }
+            },
+        });
+
+        status.textContent = "Uploading finite world mesh…";
         const renderer = await VoxelRenderer.create(gl);
-        const { world, chunk } = createDeterministicTestWorld();
-        const chunkMesh = new ChunkMesher().build(chunk, world);
-        renderer.setMesh(chunkMesh);
-        return new BrowserGame(canvas, status, gl, renderer, chunkMesh);
+        renderer.setMesh(worldMesh);
+        const terrainRange = measureTerrainRange(generator);
+        return new BrowserGame(canvas, status, gl, renderer, worldMesh, seed, terrainRange);
     }
 
-    constructor(canvas, status, gl, renderer, chunkMesh) {
+    constructor(canvas, status, gl, renderer, worldMesh, seed, terrainRange) {
         this.#canvas = canvas;
         this.#status = status;
         this.#gl = gl;
         this.#renderer = renderer;
-        this.#chunkMesh = chunkMesh;
+        this.#worldMesh = worldMesh;
+        this.#seed = seed;
+        this.#terrainRange = terrainRange;
         this.#camera = new DebugCamera(canvas);
     }
 
     start() {
-        console.info("Starting Cave Game Phase 3 chunk renderer.");
+        console.info("Starting Cave Game Phase 4 finite-world renderer.");
         console.info("WebGL version:", this.#gl.getParameter(this.#gl.VERSION));
-        console.info("Chunk faces:", this.#chunkMesh.faceCount);
+        console.info("World chunks:", this.#worldMesh.chunkCount);
+        console.info("Visible world faces:", this.#worldMesh.faceCount);
+        console.info("Actual terrain height range:", this.#terrainRange.min, "through", this.#terrainRange.max);
         this.#gl.clearColor(SKY_RED, SKY_GREEN, SKY_BLUE, 1);
         this.#installListeners();
         this.#resize();
@@ -85,7 +116,6 @@ class BrowserGame {
         if (this.#closed) return;
         if (this.#running) this.stop(message);
         this.#resizeObserver?.disconnect();
-        this.#resizeObserver = null;
         for (const [target, type, listener, options] of this.#listeners) {
             target.removeEventListener(type, listener, options);
         }
@@ -120,7 +150,7 @@ class BrowserGame {
             FIELD_OF_VIEW_RADIANS,
             this.#canvas.width / this.#canvas.height,
             0.05,
-            256,
+            512,
         );
         this.#gl.clear(this.#gl.COLOR_BUFFER_BIT | this.#gl.DEPTH_BUFFER_BIT);
         this.#renderer.render(projection, this.#camera.viewMatrix());
@@ -132,12 +162,16 @@ class BrowserGame {
         Object.assign(document.documentElement.dataset, {
             appState: "running",
             webgl: "2",
-            phase: "3",
+            phase: "4",
             drawCalls: String(this.#renderer.drawCalls),
             glErrors: "0",
             geometry: "visible",
-            chunkCount: "1",
-            chunkFaces: String(this.#chunkMesh.faceCount),
+            chunkCount: String(this.#worldMesh.chunkCount),
+            worldFaces: String(this.#worldMesh.faceCount),
+            worldBounds: "0-255,0-63,0-255",
+            terrainRange: `${WorldConfig.surfaceMinY}-${WorldConfig.surfaceMaxY}`,
+            actualTerrainRange: `${this.#terrainRange.min}-${this.#terrainRange.max}`,
+            seed: String(this.#seed),
         });
     }
 
@@ -179,6 +213,26 @@ class BrowserGame {
     }
 }
 
+function readSeed() {
+    const value = new URLSearchParams(window.location.search).get("seed");
+    if (value === null || value.trim() === "") return WorldConfig.defaultSeed;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : WorldConfig.defaultSeed;
+}
+
+function measureTerrainRange(generator) {
+    let min = WorldConfig.surfaceMaxY;
+    let max = WorldConfig.surfaceMinY;
+    for (let z = 0; z < WorldConfig.sizeZ; z += 1) {
+        for (let x = 0; x < WorldConfig.sizeX; x += 1) {
+            const height = generator.terrainHeight(x, z);
+            min = Math.min(min, height);
+            max = Math.max(max, height);
+        }
+    }
+    return Object.freeze({ min, max });
+}
+
 function verifyGeometryWasDrawn(gl, canvas) {
     const width = Math.min(canvas.width, 512);
     const height = Math.min(canvas.height, 512);
@@ -195,7 +249,7 @@ function verifyGeometryWasDrawn(gl, canvas) {
     for (let index = 0; index < pixels.length; index += 4) {
         if (pixels[index] !== 127 || pixels[index + 1] !== 204 || pixels[index + 2] !== 255) return;
     }
-    throw new Error("The chunk mesh did not produce any visible pixels");
+    throw new Error("The finite world mesh did not produce any visible pixels");
 }
 
 function showStartupFailure(status, failure) {
