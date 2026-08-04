@@ -10,43 +10,36 @@ This is an independent educational recreation. It is not affiliated with Mojang 
 
 The project supports GitHub Pages from `main` / repository root and through the GitHub Actions deployment of `web/`.
 
-## Current status: Phase 3 block and chunk system
+## Current status: Phase 4 finite world generation
 
-The browser build now renders a deterministic `16 × 64 × 16` chunk backed by compact voxel data:
+The browser build generates and renders one deterministic finite world with these exact dimensions:
 
-- `BlockType` contains only `AIR`, `GRASS`, and `ROCK`;
-- each chunk uses one 16,384-byte `Uint8Array` rather than one object per block;
-- world and local coordinates convert correctly across positive and negative chunk boundaries;
-- missing chunks and out-of-height reads safely return AIR;
-- AIR is transparent, while GRASS and ROCK are opaque;
-- `ChunkMesher` emits only faces adjacent to AIR or unavailable world data;
-- shared internal faces are removed, including faces across loaded chunk boundaries;
-- all visible faces in the test chunk are combined into one rebuildable `ChunkMesh`;
-- the renderer uploads and draws the chunk mesh once rather than drawing each block separately;
-- every emitted vertex retains position, texture-coordinate, and brightness attributes.
+- X: `0..255`;
+- Y: `0..63`;
+- Z: `0..255`;
+- `16 × 16` horizontal chunks;
+- 256 chunks total;
+- each chunk spans the complete 64-block height.
 
-There is still **no procedural terrain, caves, collision, player physics, breaking, or placement**.
+The default seed is `1337`. Add an integer query parameter to generate another world, for example `?seed=42`. The same seed always recreates the same terrain.
+
+Terrain uses two blended low-frequency value-noise layers. Natural column heights remain within Y=57 through Y=63. ROCK fills every column from Y=0 through its surface height, the highest exposed block becomes GRASS, and everything above it remains AIR. No biome logic, trees, water, ores, sand, dirt, bedrock, structures, or decoration are present.
+
+Generation and chunk-meshing progress are displayed on the loading screen and logged to the browser console. All 256 CPU-side chunk meshes are combined into one indexed world mesh for one WebGL draw call.
 
 ## What appears on screen
 
-The application opens against the light-blue `#7FCCFF` sky and displays one deterministic test chunk. The chunk contains:
+After the loading percentages complete, the application opens above the southern edge of a large primitive rolling landscape. The terrain is mostly green grass across the top with exposed gray rock down the finite outer walls. The world ends sharply at X/Z 0 and 255, so flying beyond an edge reveals the finite rectangular land mass surrounded by the light-blue `#7FCCFF` sky.
 
-- a rock floor;
-- low rock perimeter walls;
-- a doorway in the near wall;
-- a solid rock ridge;
-- a two-block-wide, three-block-high empty tunnel through the ridge;
-- six grass blocks placed around the room.
-
-The debug camera starts outside and above the doorway, looking into the chunk. Internal faces between neighboring solid blocks are absent, but all visible exterior and tunnel surfaces render with sharp grass or rock textures.
+The default seed produces gentle, rough variations across the upper world layers rather than modern Minecraft mountains or biome transitions. Texture pixels remain sharp.
 
 ## Browser controls
 
 - Click the canvas: capture the mouse.
-- Mouse or arrow keys: rotate the debug camera.
-- `W`, `A`, `S`, `D`: move.
+- Mouse or arrow keys: look around.
+- `W`, `A`, `S`, `D`: fly horizontally.
 - `Q` / `E`: move down / up.
-- Hold `Shift`: move faster.
+- Hold `Shift`: fly faster.
 - `Escape`: release the mouse; press again to stop and release graphics resources.
 
 ## Browser development
@@ -60,21 +53,18 @@ python3 -m http.server 8000
 
 Open `http://localhost:8000/` or `http://localhost:8000/web/`.
 
-## Phase 3 structure
+## Phase 4 structure
 
-- `web/block-type.mjs`: AIR, GRASS, and ROCK definitions.
-- `web/chunk-position.mjs`: immutable integer horizontal chunk coordinates.
-- `web/chunk.mjs`: compact `16 × 64 × 16` storage and index formula.
-- `web/world-coordinates.mjs`: global, chunk, and local coordinate conversions.
-- `web/world.mjs`: loaded-chunk registry and bounds-safe global lookup.
-- `web/chunk-mesh.mjs`: CPU-side rebuildable mesh data.
-- `web/chunk-mesher.mjs`: hidden-face removal and indexed mesh generation.
-- `web/test-chunk.mjs`: deterministic Phase 3 room and tunnel.
-- `web/renderer.mjs`: WebGL upload, one chunk draw, and GPU disposal.
+- `web/world-config.mjs`: authoritative finite dimensions and surface range.
+- `web/terrain-generator.mjs`: seeded low-frequency value-noise terrain.
+- `web/world.mjs`: bounds-enforced chunk storage and block access.
+- `web/chunk-mesher.mjs`: per-chunk hidden-face generation.
+- `web/world-mesh.mjs`: aggregation of 256 chunk meshes into one indexed upload.
+- `web/app.mjs`: loading progress, seed selection, camera, and rendering lifecycle.
 
 ## Desktop reference build
 
-The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 3 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
+The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 4 implementation uses WebGL 2 because GitHub Pages cannot execute native LWJGL code.
 
 ```bash
 ./gradlew build
@@ -82,13 +72,6 @@ The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phas
 ./gradlew run
 ```
 
-## Project documents
+## Scope boundary
 
-- [`SPEC.md`](SPEC.md)
-- [`ASSUMPTIONS.md`](ASSUMPTIONS.md)
-- [`ROADMAP.md`](ROADMAP.md)
-- [`WEB_TARGET.md`](WEB_TARGET.md)
-
-## Non-goals
-
-Mining, placement, inventory, mobs, crafting, survival systems, sound, multiplayer, and world saving remain explicitly excluded.
+Phase 4 does not add caves, collision, a player entity, gravity, jumping, block breaking, block placement, world saving, water, trees, ores, structures, or modern Minecraft biome systems.
