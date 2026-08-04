@@ -6,105 +6,78 @@ This is an independent educational recreation. It is not affiliated with Mojang 
 
 ## Play in a browser
 
-Open the GitHub Pages build:
-
 **https://orscathinus.github.io/minecraft/**
 
-The repository root now contains the browser entry page, so the game works when GitHub Pages publishes from **`main` / root**. The separate GitHub Actions Pages workflow can also deploy the contents of `web/` directly.
+The project supports GitHub Pages from `main` / repository root and through the GitHub Actions deployment of `web/`.
 
-## Current status: browser-enabled Phase 1 foundation
+## Current status: Phase 2 browser voxel renderer
 
-The browser build currently provides:
+The browser build now renders two indexed voxel cubes through WebGL 2:
 
-- a full-window WebGL 2 canvas;
-- the documented sky clear color `#7FCCFF`;
-- display-synchronized rendering through `requestAnimationFrame`;
-- fixed simulation updates at 60 updates per second;
-- bounded catch-up behavior after pauses or inactive tabs;
-- browser zoom, resize, and high-density-display handling;
-- WebGL version and renderer logging;
-- visible startup error reporting.
+- one grass cube and one rock cube;
+- an original generated `32 × 16` atlas containing two `16 × 16` textures;
+- the same material texture on all six faces of each cube;
+- nearest-neighbor filtering for sharp pixels;
+- perspective projection that responds to resizing;
+- a temporary movable debug camera;
+- depth testing and back-face culling;
+- resource-file vertex and fragment shaders;
+- position, texture-coordinate, and brightness attributes;
+- one combined mesh and one draw call for both cubes;
+- explicit cleanup of vertex arrays, buffers, programs, shaders, and textures.
 
-There are still **no blocks, terrain, player, camera movement, textures, or gameplay**. The current visible result is a flat light-blue screen.
+There is still **no terrain, collision, caves, chunk generation, player physics, breaking, or placement**.
 
-Pressing `Escape` stops the browser application. Webpages are normally not permitted to close their own tabs, so close the tab or reload the page afterward.
+## Browser controls
+
+- Click the canvas: capture the mouse.
+- Mouse or arrow keys: rotate the debug camera.
+- `W`, `A`, `S`, `D`: move.
+- `Q` / `E`: move down / up.
+- Hold `Shift`: move faster.
+- `Escape`: release the mouse; press again to stop and release graphics resources.
+
+## What appears on screen
+
+The application opens against the light-blue `#7FCCFF` sky. A green grass-textured cube and a gray rock-textured cube appear side by side. Moving or rotating the debug camera reveals every side, with modest face brightness differences making cube orientation easy to inspect. The original placeholder texture pixels remain crisp rather than blurred.
 
 ## Browser development
 
-Requirements:
-
-- a current browser with WebGL 2 enabled;
-- Node.js 24 for automated browser-logic tests;
-- Python 3 or another static HTTP server for local preview.
-
-Run the browser tests:
+Requirements: a WebGL 2 browser, Node.js 24 for tests, and Python 3 or another static server.
 
 ```bash
 node --test web/test/*.test.mjs
-```
-
-Serve the repository locally in the same layout used by branch-based GitHub Pages:
-
-```bash
 python3 -m http.server 8000
 ```
 
-Then open `http://localhost:8000/`. The direct `web/` entry remains available at `http://localhost:8000/web/`.
+Open `http://localhost:8000/` or `http://localhost:8000/web/`.
 
-The browser architecture and its relationship to the desktop build are documented in [`WEB_TARGET.md`](WEB_TARGET.md).
+## Browser renderer structure
+
+- `web/renderer.mjs`: shader program, atlas texture, VAO/VBO/EBO, draw, and disposal lifecycle.
+- `web/mesh.mjs`: reusable aggregate mesh data suitable for later chunk meshes.
+- `web/atlas.mjs`: original atlas pixels and tile-coordinate calculations.
+- `web/debug-camera.mjs`: temporary Phase 2 camera controls.
+- `web/math.mjs`: perspective and view matrices.
+- `web/shaders/`: GLSL ES 3.00 shader resources.
 
 ## Desktop reference build
 
-The existing Java/LWJGL desktop target remains available as a working reference implementation of Phase 1.
-
-Requirements:
-
-- a desktop computer with OpenGL 3.3 Core support;
-- JDK 21.
-
-Build and test on macOS or Linux:
+The Java/LWJGL desktop target remains a Phase 1 reference shell. The public Phase 2 renderer is implemented in WebGL 2 because GitHub Pages cannot execute native LWJGL code.
 
 ```bash
 ./gradlew build
 ./gradlew test
-```
-
-Run the desktop target:
-
-```bash
 ./gradlew run
 ```
 
-Windows equivalents:
-
-```bat
-gradlew.bat build
-gradlew.bat test
-gradlew.bat run
-```
-
-The checked-in Gradle launchers pin Gradle 9.6.1. The first invocation downloads the official wrapper bootstrap, verifies its SHA-256 checksum, and then downloads the pinned Gradle distribution.
-
 ## Project documents
 
-- [`SPEC.md`](SPEC.md): historical target behavior and non-goals.
-- [`ASSUMPTIONS.md`](ASSUMPTIONS.md): conservative approximation choices.
-- [`ROADMAP.md`](ROADMAP.md): implementation phases 1 through 12.
-- [`WEB_TARGET.md`](WEB_TARGET.md): browser delivery amendment.
-
-## Supported targets
-
-Browser target:
-
-- current desktop browsers with WebGL 2;
-- current mobile browsers where WebGL 2 and sufficient resources are available.
-
-Desktop reference target:
-
-- Windows x64 and ARM64;
-- Linux x64 and ARM64;
-- macOS x64 and ARM64.
+- [`SPEC.md`](SPEC.md)
+- [`ASSUMPTIONS.md`](ASSUMPTIONS.md)
+- [`ROADMAP.md`](ROADMAP.md)
+- [`WEB_TARGET.md`](WEB_TARGET.md)
 
 ## Non-goals
 
-The project explicitly excludes mining, block placement, inventory, mobs, crafting, survival systems, sound, multiplayer, world saving, and modern Minecraft mechanics. See [`SPEC.md`](SPEC.md#12-non-goals) for the authoritative list.
+Mining, placement, inventory, mobs, crafting, survival systems, sound, multiplayer, and world saving remain explicitly excluded.
