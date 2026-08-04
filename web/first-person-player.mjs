@@ -25,7 +25,7 @@ export class FirstPersonPlayer {
         if (!(canvas instanceof HTMLCanvasElement)) {
             throw new TypeError("FirstPersonPlayer requires a canvas");
         }
-        if (!spawnController || typeof spawnController.respawnPlayer !== "function"
+        if (!spawnController || typeof spawnController.updateHeld !== "function"
             || typeof spawnController.snapshot !== "function") {
             throw new TypeError("FirstPersonPlayer requires a historical spawn controller");
         }
@@ -47,8 +47,8 @@ export class FirstPersonPlayer {
             this.#mouseDeltaY = 0;
         }
 
-        if (this.#keys.has("KeyR")) {
-            this.#spawnController.respawnPlayer(this.#body);
+        const respawn = this.#spawnController.updateHeld(this.#body, this.#keys.has("KeyR"));
+        if (respawn !== null) {
             this.#jumpQueued = false;
             this.#respawnedLastUpdate = true;
             return this.snapshot();
