@@ -14,32 +14,39 @@ The primary public build is a browser-playable application hosted by GitHub Page
 
 The browser build lives in `web/`. A root `index.html` loads the same modules for branch-based GitHub Pages.
 
-## Phase 7 original block textures
+## Phase 8 binary sunlight
 
-`web/block-textures.mjs` deterministically generates two original `16 × 16` RGBA textures. GRASS uses a mottled six-color green palette. ROCK uses a dark irregular six-color neutral-gray palette. The algorithms and palettes were created specifically for this repository and do not load, copy, trace, sample, or derive pixels from Minecraft, Mojang, RubyDung, or another game.
+The lighting model has exactly two meaningful states: BRIGHT and DARK. `web/sunlight.mjs` scans each X/Z column downward from Y=63 and records the first opaque block. AIR allows the scan to continue. The first GRASS or ROCK block is BRIGHT; every opaque block below it is DARK.
 
-The same material is assigned to all six faces of each block. GRASS never switches to a dirt side, and ROCK has no alternate top or bottom. The renderer continues to use only position, atlas UV, and basic brightness vertex attributes; it adds no normal maps, PBR channels, shadows, ambient occlusion, or animation.
+The sunlight cache is an `Int8Array` with one entry per X/Z column, using 65,536 bytes for the complete 256 × 256 horizontal world. It stores the highest opaque Y coordinate or `-1` for an empty column.
 
-## Atlas boundary protection
+## Relighting and mesh rebuilding
 
-`web/atlas.mjs` packs the two materials into one runtime atlas. Every `16 × 16` tile receives a one-pixel replicated gutter on all four sides. Tile UVs cover the complete interior texel rectangle while remaining slightly inside its mathematical boundary. Therefore interpolation and rasterization near an edge encounter a copy of the same material instead of the neighboring tile.
+`World.setBlock` marks the edited X/Z column dirty in addition to its chunk. Boundary edits continue to invalidate neighboring chunks. `SunlightModel.rebuildDirtyColumns` rescans only changed columns, and `rebuildDirtyChunkMeshes` performs relighting before rebuilding affected chunk geometry.
 
-`web/pixel-texture-sampling.mjs` configures `NEAREST` for both minification and magnification and uses `CLAMP_TO_EDGE` wrapping. The renderer does not call `generateMipmap` and selects no mipmap minification mode.
+The initial load runs terrain generation, cave carving, full sunlight calculation, and then chunk meshing. The binary state is written into the sixth float of every visible vertex. The fragment shader performs no voxel lookup or world-sized raycast.
 
-## Retained generation tool
+## Dark cave rendering
 
-`tools/generate-block-textures.mjs` imports the exact runtime texture source and can write deterministic grass, rock, and padded-atlas PNG previews under `build/texture-previews/`. It uses only Node built-in modules. Preview generation is a development aid; the browser consumes the source RGBA pixels directly.
+The vertex shader passes the binary state and view-space distance. The fragment shader applies exactly one full brightness and one fixed dim brightness:
 
-## Existing world and player systems
+- BRIGHT: `1.00` texture brightness;
+- DARK: `0.28` texture brightness.
 
-The Phase 6 finite terrain, sphere-worm caves, chunk seam handling, cave-adjacent spawn, and the Phase 5 collision-enabled first-person player remain unchanged. The complete cave-aware world still renders as one aggregate indexed WebGL draw call.
+Only DARK geometry receives black distance fog. The fog begins at 4 blocks, ends at 30 blocks, has five deliberately crude steps, and reaches 0.96 strength. BRIGHT geometry receives no aggressive cave fog. The clear color remains exactly `#7FCCFF`.
+
+There is no smooth-light gradient between blocks, ambient occlusion, dynamic shadow, day/night cycle, torch light, colored light, or sideways light flood fill.
+
+## Existing systems
+
+The finite seeded terrain, sphere-worm caves, seam-aware chunk meshing, original 16 × 16 grass and rock textures, first-person collision, gravity, and jumping remain active. The complete world still uses one aggregate indexed WebGL draw call.
 
 ## Testing
 
-Node tests verify stable texture checksums, full opacity, color distinction, green and neutral-gray palette characteristics, exact replicated gutters, bleeding-safe UV bounds, identical tile selection and UV order on every face of both block types, nearest-only sampling, disabled mipmaps, and deterministic PNG encoding.
+Node tests verify unobstructed sunlight, AIR transmission, roof blocking, Y=63 behavior, vertically exposed cave openings, binary vertex values, BRIGHT/DARK face counts, dirty-column relighting, and mesh rebuilding order.
 
-The Chromium smoke test loads both GitHub Pages entry points and requires the Phase 7 title and texture metadata, original procedural provenance, `16 × 16` resolution, a one-pixel gutter, nearest filtering, disabled mipmaps, visible cave-world geometry, one draw call, and zero WebGL errors.
+The Chromium smoke test loads both GitHub Pages entry points and requires Phase 8 state, the original texture metadata, exact `#7FCCFF` sky metadata, two lighting states, fixed dark brightness, dark-only stepped fog, nonzero BRIGHT and DARK geometry, no fragment world raycasts, visible geometry, one draw call, and zero WebGL errors.
 
 ## Scope boundary
 
-Phase 7 does not add lighting, shadows, ambient occlusion, normal maps, PBR materials, animated textures, dirt, additional block types, block interaction, inventory, enemies, sound, or persistence.
+Phase 8 does not add torches, colored or propagated block light, smooth lighting, dynamic shadows, ambient occlusion, day/night cycles, additional blocks, block interaction, inventory, enemies, sound, or persistence.
