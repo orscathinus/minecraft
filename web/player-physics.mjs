@@ -15,6 +15,11 @@ export const PlayerConfig = Object.freeze({
     terminalVelocity: 50,
 });
 
+export const VoidSafetyConfig = Object.freeze({
+    coordinateLimit: 1_000_000_000_000,
+    rebaseMagnitude: 1_000_000_000,
+});
+
 export function playerAabb(position, config = PlayerConfig) {
     requirePosition(position);
     const halfWidth = config.width / 2;
@@ -67,10 +72,13 @@ export function movePlayerAabb(world, position, displacement, config = PlayerCon
 export class PlayerPhysics {
     #world;
     #position;
+    #velocityX = 0;
     #velocityY = 0;
+    #velocityZ = 0;
     #yaw;
     #pitch;
     #grounded = false;
+    #voidSafetyRebases = 0;
 
     constructor(world, {
         position = [128.5, 64, 128.5],
@@ -107,6 +115,8 @@ export class PlayerPhysics {
             moveX = moveX / horizontalLength * PlayerConfig.moveSpeed;
             moveZ = moveZ / horizontalLength * PlayerConfig.moveSpeed;
         }
+        this.#velocityX = moveX;
+        this.#velocityZ = moveZ;
 
         if (input.jumpPressed && this.#grounded) {
             this.#velocityY = PlayerConfig.jumpSpeed;
@@ -118,13 +128,26 @@ export class PlayerPhysics {
         );
 
         const movement = movePlayerAabb(this.#world, this.#position, [
-            moveX * stepSeconds,
+            this.#velocityX * stepSeconds,
             this.#velocityY * stepSeconds,
-            moveZ * stepSeconds,
+            this.#velocityZ * stepSeconds,
         ]);
         this.#position = [...movement.position];
+        if (movement.hitX) this.#velocityX = 0;
+        if (movement.hitZ) this.#velocityZ = 0;
         if (movement.hitFloor || movement.hitCeiling) this.#velocityY = 0;
         this.#grounded = movement.grounded;
+        this.#applyExtremeCoordinateSafeguard();
+        return this.snapshot();
+    }
+
+    respawn(position) {
+        requirePosition(position, "respawn position");
+        this.#position = [...position];
+        this.#velocityX = 0;
+        this.#velocityY = 0;
+        this.#velocityZ = 0;
+        this.#grounded = false;
         return this.snapshot();
     }
 
@@ -157,15 +180,31 @@ export class PlayerPhysics {
     snapshot() {
         return Object.freeze({
             position: Object.freeze([...this.#position]),
+            velocity: Object.freeze([this.#velocityX, this.#velocityY, this.#velocityZ]),
+            velocityX: this.#velocityX,
             velocityY: this.#velocityY,
+            velocityZ: this.#velocityZ,
             grounded: this.#grounded,
             yaw: this.#yaw,
             pitch: this.#pitch,
+            belowWorld: this.#position[1] < 0,
+            voidSafetyRebases: this.#voidSafetyRebases,
         });
     }
 
     get grounded() { return this.#grounded; }
     get position() { return Object.freeze([...this.#position]); }
+
+    #applyExtremeCoordinateSafeguard() {
+        let changed = false;
+        for (let axis = 0; axis < 3; axis += 1) {
+            const value = this.#position[axis];
+            if (Math.abs(value) <= VoidSafetyConfig.coordinateLimit) continue;
+            this.#position[axis] = Math.sign(value || 1) * VoidSafetyConfig.rebaseMagnitude;
+            changed = true;
+        }
+        if (changed) this.#voidSafetyRebases += 1;
+    }
 }
 
 function moveAxis(world, position, delta, axis, config) {

@@ -4,7 +4,12 @@ import { BlockType } from "../block-type.mjs";
 import { Chunk } from "../chunk.mjs";
 import { ChunkPosition } from "../chunk-position.mjs";
 import { FixedStepTimer } from "../fixed-step-timer.mjs";
-import { movePlayerAabb, PlayerConfig, PlayerPhysics } from "../player-physics.mjs";
+import {
+    movePlayerAabb,
+    PlayerConfig,
+    PlayerPhysics,
+    VoidSafetyConfig,
+} from "../player-physics.mjs";
 import { World } from "../world.mjs";
 
 function makeWorld(blocks) {
@@ -84,6 +89,54 @@ test("fixed updates produce consistent movement at different render rates", () =
     assert.equal(at30Fps.updates, 60);
     assert.equal(at144Fps.updates, 60);
     assert.ok(Math.abs(at30Fps.position[2] - at144Fps.position[2]) < 1e-9);
+});
+
+test("crossing below Y=0 continues falling without automatic respawn", () => {
+    const player = new PlayerPhysics(new World(), { position: [20.5, 0.05, 20.5] });
+    let crossedBelow = false;
+    for (let update = 0; update < 180; update += 1) {
+        const state = player.update(1 / 60);
+        if (state.position[1] < 0) crossedBelow = true;
+        assert.notEqual(state.position[1], 74);
+    }
+    const final = player.snapshot();
+    assert.equal(crossedBelow, true);
+    assert.equal(final.belowWorld, true);
+    assert.ok(final.position[1] < -20);
+    assert.ok(final.velocityY < 0);
+    assert.equal(final.voidSafetyRebases, 0);
+});
+
+test("the player may leave the finite world horizontally", () => {
+    const player = new PlayerPhysics(new World(), {
+        position: [255.8, 74, 128.5],
+        yaw: 0,
+    });
+    for (let update = 0; update < 30; update += 1) {
+        player.update(1 / 60, { right: true });
+    }
+    assert.ok(player.position[0] > 256);
+});
+
+test("respawn places the body exactly and clears all velocity", () => {
+    const player = new PlayerPhysics(new World(), { position: [10.5, 74, 10.5] });
+    player.update(1 / 60, { forward: true, right: true });
+    const state = player.respawn([200.5, 74, 30.5]);
+    assert.deepEqual(state.position, [200.5, 74, 30.5]);
+    assert.deepEqual(state.velocity, [0, 0, 0]);
+    assert.equal(state.grounded, false);
+});
+
+test("extreme-coordinate safeguard remains in the void and never acts as respawn", () => {
+    const player = new PlayerPhysics(new World(), {
+        position: [0.5, -VoidSafetyConfig.coordinateLimit - 10, 0.5],
+    });
+    const state = player.update(1 / 60);
+    assert.equal(state.position[1], -VoidSafetyConfig.rebaseMagnitude);
+    assert.notEqual(state.position[1], 74);
+    assert.equal(state.belowWorld, true);
+    assert.equal(state.voidSafetyRebases, 1);
+    assert.ok(state.velocityY < 0);
 });
 
 function simulateOneSecond(renderFramesPerSecond) {

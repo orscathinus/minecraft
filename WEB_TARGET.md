@@ -14,55 +14,82 @@ The primary public build is a browser-playable application hosted by GitHub Page
 
 The browser build lives in `web/`. A root `index.html` loads the same modules for branch-based GitHub Pages.
 
-## Phase 9 proximity-ordered processing
+## Phase 10 historical spawn model
+
+`web/spawn-controller.mjs` selects integer block coordinates X/Z `0..255`, adds `0.5` to place the player at each block center, and fixes the feet position at Y=`74`.
+
+No terrain-height query, cave avoidance, collision search, or safe-spawn search occurs. The initial velocity is zero. The initial camera faces toward the world center and downward only to keep the random high-altitude start visually useful.
+
+By default, the browser obtains one session-random 32-bit seed. A fixed `?spawnSeed=<integer>` query value selects a reproducible debug stream. The spawn generator is an integer 32-bit linear-congruential generator and is independent from the terrain seed.
+
+## Held R behavior
+
+`FirstPersonPlayer` records `KeyR` as ordinary held input. On every fixed game update it passes that state to `HistoricalSpawnController.updateHeld`.
+
+When held, the controller:
+
+1. chooses a new random X/Z block center;
+2. calls `PlayerPhysics.respawn` with Y=74;
+3. clears X/Y/Z velocity and grounded state;
+4. returns before movement or gravity run for that update.
+
+Keyboard release, window blur, page hiding, or pointer-lock release clears the held state. There is no debounce or cooldown.
+
+## Void behavior
+
+`World.getBlock` returns AIR outside the finite voxel bounds. Player collision therefore imposes no horizontal wall and no floor below Y=0.
+
+`PlayerPhysics` does not clamp position to the world and does not auto-respawn after crossing Y=0. Gravity and the existing terminal falling speed continue normally. R remains available at any finite coordinate.
+
+The chunk manager still owns only the finite 16×16 grid. Its scheduling anchor clamps an outside player's calculated chunk to the nearest finite edge chunk; this affects processing priority only and does not alter player position.
+
+## Extreme numerical safeguard
+
+To avoid eventual floating-point precision failure, a coordinate whose absolute magnitude exceeds `1e12` is rebased to the same-sign magnitude `1e9`.
+
+The safeguard:
+
+- is unreachable in ordinary play;
+- does not use Y=74;
+- does not increment respawn counts;
+- does not return the player to the map;
+- preserves velocity and continued void behavior.
+
+There is otherwise no lower-Y clamp.
+
+## Existing proximity processing
 
 The world remains a finite `16 × 16` chunk grid. Each chunk covers `16 × 16` blocks horizontally and all 64 vertical layers.
 
-Terrain, caves, and binary sunlight are deterministic prerequisites. Once the player spawn is known, `web/chunk-manager.mjs` creates one work record for each chunk. The player's current chunk is calculated with `floor(worldCoordinate / 16)` and clamped to the finite grid.
+A binary-heap priority queue orders unfinished work by squared horizontal distance from the player's finite-grid priority anchor. Equal distances use chunk Z and then chunk X.
 
-A binary-heap priority queue orders unfinished work by squared horizontal distance from the player's chunk. Equal distances use chunk Z and then chunk X as deterministic tie breaks.
+- Normal mode: at most two mesh-and-upload jobs per animation frame.
+- Historical mode: one job every ten frames.
 
-## Frame budgets
-
-All GPU uploads remain on the rendering thread inside the animation-frame callback.
-
-- Normal mode: at most two chunk mesh-and-upload jobs each frame.
-- Historical-loading mode: one job every ten frames.
-
-No `sleep`, busy wait, or blocking delay is inserted. Physics, input, rendering, and pointer-lock handling continue on every frame. Historical mode merely withholds processing tokens between eligible frames.
-
-The player's own chunk is processed synchronously before the first playable frame. Remaining chunks become visible incrementally in priority order.
-
-## Reprioritization and stale work
-
-Crossing a chunk boundary clears and rebuilds the unfinished queue around the new player chunk. Every queue entry contains the current scheduling epoch and chunk revision. Entries from an earlier epoch or revision are ignored.
-
-Already visible chunks remain uploaded and are not requeued because of movement. World changes create explicit refresh records. Dirty sunlight columns are rebuilt first, followed by the affected chunk meshes and any boundary neighbors.
-
-## Renderer ownership
-
-`web/renderer.mjs` stores one independently disposable `GpuMesh` per chunk key. Uploading a refresh constructs the replacement mesh, disposes the prior VAO/VBO/EBO for that key, and then installs the new mesh.
-
-The renderer draws every currently visible nonempty chunk. Draw calls therefore grow as chunks become visible rather than remaining one aggregate draw call. A chunk upload never occurs from a worker thread.
-
-## Optional overlay and modes
-
-`F3` toggles an optional overlay containing player chunk, queued, meshed, visible, draw calls, processing mode, and budget. The same overlay can start enabled through `?debugChunks=1`.
-
-`H` switches processing modes. Historical mode can also be selected at startup through `?loading=historical`.
+All WebGL uploads remain on the rendering thread. Respawns can change the priority anchor on successive fixed updates; epoch/revision checks discard stale unfinished work without reuploading completed chunks.
 
 ## Existing lighting and assets
 
-Chunk meshes still encode exactly two light states. BRIGHT faces use full texture color. DARK faces use fixed `0.28` brightness and heavy stepped black fog between 4 and 30 blocks. The clear color remains exactly `#7FCCFF`.
+Chunk geometry encodes exactly two light states. BRIGHT faces use full texture color. DARK faces use fixed `0.28` brightness and heavy stepped black fog between 4 and 30 blocks. The clear color remains exactly `#7FCCFF`.
 
 The grass and rock materials remain original deterministic `16 × 16` procedural textures with replicated atlas gutters, nearest filtering, and no mipmaps.
 
 ## Testing
 
-Node tests verify priority ordering, deterministic ties, finite player-chunk calculation, normal and historical budgets, unfinished-work reprioritization, dirty relighting before refresh, and prevention of reasonless duplicate uploads.
+Node tests verify:
 
-The Chromium smoke test loads both GitHub Pages entry points in normal mode and also loads historical mode with the overlay enabled. It verifies visible nearby chunks, remaining queued historical work, processing metadata, original lighting and texture metadata, responsive startup, and zero WebGL errors.
+- deterministic fixed-seed spawning;
+- Y=74 for initial and repeated spawns;
+- X/Z block-center range;
+- three-axis velocity reset;
+- one respawn per held fixed update and no respawn after release;
+- R-style respawn from far below the map;
+- continued falling below Y=0 without automatic respawn;
+- horizontal departure from the finite world;
+- the extreme safeguard remaining in the void.
+
+The Chromium smoke test loads both GitHub Pages entry points with a fixed spawn seed and validates Phase 10 metadata, reproducible spawn configuration, zero automatic void respawns, no world clamps, nearest-first chunks, existing lighting/assets, visible output, and zero WebGL errors.
 
 ## Scope boundary
 
-Phase 9 does not add infinite terrain, chunk unloading, worker-thread generation, frustum culling, occlusion culling, smooth lighting, block interaction, inventory, enemies, sound, or persistence.
+Phase 10 does not add health, damage, death screens, lives, checkpoints, safe-spawn searching, respawn cooldowns, infinite terrain, chunk unloading, worker-thread generation, block interaction, inventory, enemies, sound, water, lava, or persistence.
