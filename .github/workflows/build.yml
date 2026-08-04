@@ -21,11 +21,26 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
       - name: Set up Gradle cache and wrapper validation
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Build and test
+      - name: Build and test desktop target
         run: ./gradlew --no-daemon clean build
 
-      - name: Smoke-test the OpenGL application
+      - name: Smoke-test the desktop OpenGL application
         run: xvfb-run -a ./gradlew --no-daemon smokeTest
+
+      - name: Validate browser target
+        run: |
+          node --check web/app.mjs
+          node --check web/fixed-step-timer.mjs
+          node --test web/test/*.test.mjs
+
+      - name: Smoke-test browser WebGL 2 application
+        run: bash web/test/browser-smoke.sh
