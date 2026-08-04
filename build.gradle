@@ -71,7 +71,9 @@ distributions {
             from('FINAL_TEST_REPORT.md')
             into('browser') {
                 from('index.html')
-                from('web')
+                into('web') {
+                    from('web')
+                }
             }
             into('docs') {
                 from('docs')
