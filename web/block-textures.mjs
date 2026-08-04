@@ -1,5 +1,5 @@
 export const BLOCK_TEXTURE_SIZE = 16;
-export const BLOCK_TEXTURE_VERSION = "phase-7-original-v1";
+export const BLOCK_TEXTURE_VERSION = "phase-12-rubydung-inspired-v2";
 
 export const BlockMaterial = Object.freeze({
     GRASS: "grass",
@@ -7,29 +7,52 @@ export const BlockMaterial = Object.freeze({
 });
 
 export const BLOCK_TEXTURE_METADATA = Object.freeze({
-    ownership: "Original procedural assets created for this repository",
+    ownership: "Original from-scratch procedural approximations created for this repository",
     source: "web/block-textures.mjs",
+    historicalReference: "Cave Game Tech Test and RubyDung screenshots",
     resolution: `${BLOCK_TEXTURE_SIZE}x${BLOCK_TEXTURE_SIZE}`,
     version: BLOCK_TEXTURE_VERSION,
     copiedAssets: false,
 });
 
 const GRASS_PALETTE = Object.freeze([
-    Object.freeze([38, 91, 34]),
-    Object.freeze([47, 108, 39]),
-    Object.freeze([55, 124, 44]),
-    Object.freeze([64, 139, 50]),
-    Object.freeze([74, 153, 58]),
-    Object.freeze([88, 166, 69]),
+    Object.freeze([50, 117, 24]),
+    Object.freeze([60, 135, 27]),
+    Object.freeze([70, 151, 31]),
+    Object.freeze([81, 166, 35]),
+    Object.freeze([92, 181, 41]),
+    Object.freeze([106, 195, 49]),
+    Object.freeze([124, 207, 61]),
+    Object.freeze([145, 218, 78]),
 ]);
 
 const ROCK_PALETTE = Object.freeze([
-    Object.freeze([42, 44, 48]),
-    Object.freeze([51, 53, 58]),
-    Object.freeze([61, 63, 68]),
-    Object.freeze([72, 74, 80]),
-    Object.freeze([84, 86, 92]),
-    Object.freeze([98, 100, 106]),
+    Object.freeze([13, 13, 13]),
+    Object.freeze([29, 29, 29]),
+    Object.freeze([69, 69, 69]),
+    Object.freeze([91, 91, 91]),
+    Object.freeze([117, 117, 117]),
+    Object.freeze([146, 146, 146]),
+    Object.freeze([178, 178, 178]),
+    Object.freeze([208, 208, 208]),
+    Object.freeze([229, 229, 229]),
+]);
+
+const ROCK_CENTERS = Object.freeze([
+    Object.freeze([0.4, 1.1]),
+    Object.freeze([5.1, 0.5]),
+    Object.freeze([10.8, 1.8]),
+    Object.freeze([15.0, 0.2]),
+    Object.freeze([2.7, 5.4]),
+    Object.freeze([8.0, 5.2]),
+    Object.freeze([13.4, 5.7]),
+    Object.freeze([0.8, 10.1]),
+    Object.freeze([5.7, 10.0]),
+    Object.freeze([11.3, 10.3]),
+    Object.freeze([15.2, 10.4]),
+    Object.freeze([3.0, 14.6]),
+    Object.freeze([8.4, 14.1]),
+    Object.freeze([13.5, 14.9]),
 ]);
 
 export function generateBlockTexture(material) {
@@ -64,31 +87,69 @@ export function textureChecksum(pixels) {
 }
 
 function grassColor(x, y) {
-    const coarse = hash2d(Math.floor(x / 3), Math.floor(y / 3), 0x13579bdf);
-    const fine = hash2d(x, y, 0x2468ace0);
-    let index = positiveModulo(
-        coarse % GRASS_PALETTE.length + fine % 3 - 1,
-        GRASS_PALETTE.length,
-    );
+    const fine = hash2d(x, y, 0x1d35a7b9);
+    const local = hash2d(Math.floor(x / 2), Math.floor(y / 2), 0x74ac93e1);
+    let index = 3
+        + positiveModulo(fine >>> 3, 5) - 2
+        + positiveModulo(local >>> 8, 3) - 1;
 
-    if ((fine >>> 8) % 17 === 0) index = Math.max(0, index - 2);
-    else if ((fine >>> 16) % 19 === 0) index = Math.min(GRASS_PALETTE.length - 1, index + 1);
-    return GRASS_PALETTE[index];
+    if ((x * 5 + y * 3 + (fine & 7)) % 19 === 0) index += 2;
+    if ((x * 2 + y * 7 + ((fine >>> 5) & 7)) % 23 === 0) index -= 2;
+    return GRASS_PALETTE[clamp(index, 0, GRASS_PALETTE.length - 1)];
 }
 
 function rockColor(x, y) {
-    const coarse = hash2d(Math.floor(x / 4), Math.floor(y / 4), 0x5a17c9e3);
-    const fine = hash2d(x, y, 0x73b2d145);
-    let index = positiveModulo(
-        coarse % ROCK_PALETTE.length + fine % 3 - 1,
-        ROCK_PALETTE.length,
-    );
+    const nearest = nearestRockCenter(x, y);
+    const neighboringLabels = [
+        nearestRockCenter(positiveModulo(x + 1, BLOCK_TEXTURE_SIZE), y).label,
+        nearestRockCenter(positiveModulo(x - 1, BLOCK_TEXTURE_SIZE), y).label,
+        nearestRockCenter(x, positiveModulo(y + 1, BLOCK_TEXTURE_SIZE)).label,
+        nearestRockCenter(x, positiveModulo(y - 1, BLOCK_TEXTURE_SIZE)).label,
+    ];
+    const differentNeighbors = neighboringLabels.filter(label => label !== nearest.label).length;
+    const seam = nearest.secondDistance - nearest.firstDistance < 2.5 || differentNeighbors >= 3;
 
-    if ((x * 3 + y * 5 + (fine & 7)) % 23 === 0) index = 0;
-    else if ((x * 7 + y * 2 + ((fine >>> 5) & 7)) % 29 === 0) {
-        index = Math.min(ROCK_PALETTE.length - 1, index + 2);
+    if (seam) {
+        return ROCK_PALETTE[hash2d(x, y, 0x2f31c48d) % 4 === 0 ? 1 : 0];
     }
+
+    const [centerX, centerY] = ROCK_CENTERS[nearest.label];
+    const deltaX = wrappedDelta(x, centerX);
+    const deltaY = wrappedDelta(y, centerY);
+    const base = 4 + hash2d(nearest.label, 0, 0x68d2a5f1) % 4;
+    const directionalShade = deltaX + deltaY < -1.5 ? 1 : deltaX + deltaY > 2.5 ? -1 : 0;
+    const grain = positiveModulo(hash2d(x, y, 0x9bc457e3), 3) - 1;
+    const index = clamp(base + directionalShade + grain, 2, ROCK_PALETTE.length - 1);
     return ROCK_PALETTE[index];
+}
+
+function nearestRockCenter(x, y) {
+    let label = -1;
+    let firstDistance = Number.POSITIVE_INFINITY;
+    let secondDistance = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < ROCK_CENTERS.length; index += 1) {
+        const [centerX, centerY] = ROCK_CENTERS[index];
+        const deltaX = wrappedDelta(x, centerX);
+        const deltaY = wrappedDelta(y, centerY);
+        const distance = deltaX * deltaX + deltaY * deltaY * 0.9;
+        if (distance < firstDistance) {
+            secondDistance = firstDistance;
+            firstDistance = distance;
+            label = index;
+        } else if (distance < secondDistance) {
+            secondDistance = distance;
+        }
+    }
+
+    return { label, firstDistance, secondDistance };
+}
+
+function wrappedDelta(value, center) {
+    const direct = value - center;
+    if (direct > BLOCK_TEXTURE_SIZE / 2) return direct - BLOCK_TEXTURE_SIZE;
+    if (direct < -BLOCK_TEXTURE_SIZE / 2) return direct + BLOCK_TEXTURE_SIZE;
+    return direct;
 }
 
 function hash2d(x, y, seed) {
@@ -100,4 +161,8 @@ function hash2d(x, y, seed) {
 
 function positiveModulo(value, divisor) {
     return ((value % divisor) + divisor) % divisor;
+}
+
+function clamp(value, minimum, maximum) {
+    return Math.max(minimum, Math.min(maximum, value));
 }
