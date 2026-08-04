@@ -6,15 +6,11 @@ This is an independent educational recreation. It is not affiliated with Mojang 
 
 ## Play in a browser
 
-The primary public build is designed for GitHub Pages:
+Open the GitHub Pages build:
 
 **https://orscathinus.github.io/minecraft/**
 
-The repository owner must enable the deployment source once under:
-
-**Settings → Pages → Build and deployment → Source → GitHub Actions**
-
-After that setting is enabled, every relevant push to `main` automatically validates and deploys the browser build from `web/`.
+The repository root now contains the browser entry page, so the game works when GitHub Pages publishes from **`main` / root**. The separate GitHub Actions Pages workflow can also deploy the contents of `web/` directly.
 
 ## Current status: browser-enabled Phase 1 foundation
 
@@ -47,13 +43,13 @@ Run the browser tests:
 node --test web/test/*.test.mjs
 ```
 
-Serve the browser build locally:
+Serve the repository locally in the same layout used by branch-based GitHub Pages:
 
 ```bash
-python3 -m http.server 8000 --directory web
+python3 -m http.server 8000
 ```
 
-Then open `http://localhost:8000`.
+Then open `http://localhost:8000/`. The direct `web/` entry remains available at `http://localhost:8000/web/`.
 
 The browser architecture and its relationship to the desktop build are documented in [`WEB_TARGET.md`](WEB_TARGET.md).
 
