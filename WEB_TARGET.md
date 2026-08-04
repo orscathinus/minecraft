@@ -14,46 +14,32 @@ The primary public build is a browser-playable application hosted by GitHub Page
 
 The browser build lives in `web/`. A root `index.html` loads the same modules for branch-based GitHub Pages.
 
-## Phase 3 block and chunk behavior
+## Phase 4 finite world generation
 
-Phase 3 adds the first finite voxel data and chunk-meshing path to the public browser target:
+The public target now generates one deterministic finite world with exact dimensions X/Z `0..255` and Y `0..63`. It contains a `16 × 16` horizontal grid of 256 chunks, each covering the full 64-block height.
 
-- exactly three block values: AIR, GRASS, and ROCK;
-- one `Uint8Array` with 16,384 entries for each `16 × 64 × 16` chunk;
-- immutable integer horizontal chunk positions;
-- global-to-chunk, global-to-local, and local-to-global conversions that support negative coordinates;
-- bounds-safe reads that return AIR for unavailable chunks and Y coordinates outside `0..63`;
-- a loaded-chunk registry for neighbor lookup;
-- CPU-side `ChunkMesh` data separated from WebGL upload;
-- `ChunkMesher` generation of only faces adjacent to AIR or unavailable world data;
-- shared-face removal within chunks and across loaded chunk borders;
-- per-vertex position, texture coordinate, and brightness data;
-- one indexed draw for the deterministic test chunk.
+`web/world-config.mjs` is the authoritative source for all world dimensions, chunk counts, the Y=57 through Y=63 natural-surface band, and the default seed. World reads outside the finite box return AIR; writes outside it are rejected; chunks outside the 16×16 grid cannot be registered.
 
-The renderer can replace its uploaded mesh, so later block edits or chunk-neighbor changes can rebuild and re-upload a chunk without changing the WebGL abstraction.
+`SeededTerrainGenerator` blends two smooth low-frequency value-noise layers. ROCK fills each column from Y=0 through its generated height. Only the highest sky-exposed solid block becomes GRASS, and blocks above remain AIR. The bottom layer is therefore completely solid. No biome selection or decorative systems participate.
 
-## Deterministic test chunk
+The asynchronous browser path yields between batches and reports generation and meshing progress through the status overlay and console. The synchronous path supports deterministic Node tests.
 
-The Phase 3 browser scene is deliberately authored rather than procedurally generated. It contains a rock floor, four low perimeter walls, a doorway, a rock ridge, a two-block-wide and three-block-high empty tunnel, and six grass blocks. The resulting optimized mesh contains 1,220 visible faces and is drawn once.
+## Rendering architecture
+
+Each loaded chunk is meshed separately through `ChunkMesher`, preserving hidden-face removal across loaded chunk borders. `world-mesh.mjs` then combines all 256 CPU-side chunk meshes into one indexed mesh for a single GPU upload and one draw call. This does not change the rebuildable chunk-mesh abstraction needed by later phases.
+
+The debug camera starts just beyond the southern world edge and looks inward. Its increased flight speed makes the 256-block-wide world practical to inspect. The projection far plane is 512 blocks.
+
+## Seed selection
+
+The default seed is `1337`. An integer `seed` query parameter overrides it. For example, `?seed=42` creates a different deterministic landscape while reusing `?seed=42` recreates the same one.
 
 ## Testing
 
-Node tests verify:
+Node tests verify exact bounds and chunk counts, deterministic same-seed heights, visibly different sampled heights for another seed, the permitted block set, one exposed grass cap per column, the 57–63 terrain range, a solid ROCK bottom layer, rejected out-of-bounds writes, and aggregation of all 256 chunk meshes.
 
-- the 16,384-entry compact storage size;
-- every coordinate-to-index result and uniqueness across the full chunk;
-- positive and negative global/local coordinate boundaries;
-- safe missing-chunk and vertical-boundary access;
-- zero geometry for AIR;
-- six faces for one isolated block;
-- ten faces for two adjacent blocks;
-- twenty-four faces for a solid `2 × 2 × 2` arrangement;
-- shared-face removal across a loaded chunk boundary;
-- visible boundary faces when neighboring world data is unavailable;
-- the deterministic test chunk's stable 1,220-face result.
-
-The Chromium smoke test serves both Pages entry points, creates WebGL 2, uploads the generated chunk mesh, verifies visible pixels, and requires one chunk, one draw call, 1,220 faces, and zero WebGL errors.
+The Chromium smoke test loads both Pages entry points and requires WebGL 2, Phase 4 state, one draw call, 256 chunks, the exact default-seed face count, finite-world metadata, visible geometry, and zero WebGL errors.
 
 ## Scope boundary
 
-Phase 3 does not add procedural terrain, caves, collision, a player entity, gravity, block breaking, block placement, chunk scheduling, or world persistence.
+Phase 4 does not add caves, water, trees, ores, sand, dirt, bedrock, structures, decorations, collision, a player body, gravity, jumping, block interaction, or persistence.
